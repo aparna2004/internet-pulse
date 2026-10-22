@@ -1,0 +1,358 @@
+--- before/frontend/src/App.tsx
++++ after/frontend/src/App.tsx
+@@ -1,18 +1,19 @@
+-import {useEffect,useRef,useState} from 'react';
+-import {animate,motion} from 'framer-motion';
++import {useCallback,useEffect,useRef,useState} from 'react';
++import {animate,motion,useReducedMotion} from 'framer-motion';
+ import {Activity,ArrowDownRight,ArrowUpRight,Radio,Network,SlidersHorizontal,RotateCcw,Pause,Play,Search,TriangleAlert,ChevronRight,ExternalLink} from 'lucide-react';
+-import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip,CartesianGrid} from 'recharts';
++import Dynamics from './Dynamics';
++import DashboardTour from './DashboardTour';
+ import Topology from './Topology';
+ import Heartbeat from './Heartbeat';
+ import {usePulse} from './usePulse';
+ import {type Filters,type Snapshot,type BGPEvent,number,time,milliseconds,collectorName} from './types';
+ 
+ const defaults:Filters={collector:'',asn:'',prefix:'',window:60};
+-const chartTooltip={background:'#101a24',border:'1px solid #304152',borderRadius:3,color:'#dce7f4',fontSize:11};
++
+ 
+ function AnimatedNumber({value,decimals=0,suffix=''}:{value:number;decimals?:number;suffix?:string}){
+- const ref=useRef<HTMLSpanElement>(null),previous=useRef(value);
+- useEffect(()=>{const animation=animate(previous.current,value,{duration:.65,ease:'easeOut',onUpdate:v=>{if(ref.current)ref.current.textContent=`${decimals?v.toFixed(decimals):number(Math.round(v))}${suffix}`}});previous.current=value;return()=>animation.stop()},[value,decimals,suffix]);
++ const ref=useRef<HTMLSpanElement>(null),previous=useRef(value);const reduced=useReducedMotion();
++ useEffect(()=>{if(reduced){if(ref.current)ref.current.textContent=`${decimals?value.toFixed(decimals):number(Math.round(value))}${suffix}`;previous.current=value;return}const animation=animate(previous.current,value,{duration:.65,ease:'easeOut',onUpdate:v=>{if(ref.current)ref.current.textContent=`${decimals?v.toFixed(decimals):number(Math.round(v))}${suffix}`}});previous.current=value;return()=>animation.stop()},[value,decimals,suffix,reduced]);
+  return <span ref={ref} data-value={value}>{decimals?value.toFixed(decimals):number(value)}{suffix}</span>
+ }
+ function Comparison({current,previous}:{current:number;previous:number|undefined}){if(previous===undefined)return <span className="comparison muted">Previous window warming up</span>;const delta=previous?(current-previous)/previous*100:null;return <span className={`comparison ${current>=previous?'positive':'negative'}`}>{current>=previous?'↑':'↓'} {delta===null?`${number(current-previous)} from zero`: `${Math.abs(delta).toFixed(1)}%`} <span>vs previous window</span></span>}
+@@ -20,17 +21,17 @@
+ 
+ export default function App(){
+  const [filters,setFilters]=useState<Filters>(defaults),[draft,setDraft]=useState<Filters>(defaults),[formError,setFormError]=useState('');
+- const {data,transport,error}=usePulse(filters);const [collectors,setCollectors]=useState<string[]>([]);
++ const {data,error,connection,lastSnapshotAt}=usePulse(filters);const [collectors,setCollectors]=useState<string[]>([]);
+  useEffect(()=>{if(data?.available_collectors.length)setCollectors(data.available_collectors)},[data?.available_collectors]);
+- const live=transport&&!!data?.connected,scope=JSON.stringify([filters.collector,filters.asn,filters.prefix]);
+- const updateWindow=(window:number)=>{setFilters(f=>({...f,window}));setDraft(f=>({...f,window}))};
++ const live=connection==='connected',scope=JSON.stringify([filters.collector,filters.asn,filters.prefix]);
++ const updateWindow=useCallback((window:number)=>{setFilters(f=>({...f,window}));setDraft(f=>({...f,window}))},[]);
+  const apply=()=>{if(draft.asn&&!/^\d+$/.test(draft.asn)){setFormError('Enter a numeric ASN, such as 13335.');return}if(draft.asn&&Number(draft.asn)>4294967295){setFormError('ASN must be between 0 and 4294967295.');return}if(draft.prefix&&!/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(draft.prefix)){setFormError('Enter an exact CIDR prefix, such as 192.0.2.0/24.');return}setFormError('');setFilters({...draft,asn:draft.asn.trim(),prefix:draft.prefix.trim()})};
+  const operationTotal=(data?.announcements??0)+(data?.withdrawals??0),ap=operationTotal?(data!.announcements/operationTotal*100):0;
+- return <div className="command-center"><header className="topbar"><a href="#topology" className="brand"><span className="brand-mark"><Activity size={22}/></span><span>Internet <b>Pulse</b><small>GLOBAL ROUTING OBSERVATORY</small></span></a><div className="topbar-right"><a className="source" href="https://ris-live.ripe.net/manual/" target="_blank" rel="noreferrer">RIPE RIS LIVE <ExternalLink size={11}/></a><span className={`status ${live?'online':''}`}><i/>{live?'LIVE':'DISCONNECTED'}</span><span className="top-clock mono">{data?time(data.timestamp):'--:--:--'}<small>LOCAL TIME</small></span></div></header>
++ return <div className="command-center"><header className="topbar"><a href="#topology" className="brand"><span className="brand-mark"><Activity size={22}/></span><span>Internet <b>Pulse</b><small>GLOBAL ROUTING OBSERVATORY</small></span></a><div className="topbar-right"><a className="source" href="https://ris-live.ripe.net/manual/" target="_blank" rel="noreferrer">RIPE RIS LIVE <ExternalLink size={11}/></a><DashboardTour/><span className={`status ${live?'online':connection}`} title={connection==='connected'?'Dashboard snapshots and upstream connection are healthy':connection==='stale'?'No dashboard snapshot for more than 8 seconds':connection==='reconnecting'?'Attempting to reconnect the dashboard socket':'Backend reports an upstream disconnect, or this scope is unavailable'}><i/>{connection.toUpperCase()}</span><span className="snapshot-received mono"><time dateTime={lastSnapshotAt?new Date(lastSnapshotAt).toISOString():undefined}>{lastSnapshotAt?time(lastSnapshotAt/1000):'—'}</time><small>LAST SNAPSHOT · LOCAL</small></span></div></header>
+   <main id="topology"><div className="page-title"><div><span className="eyebrow">THE GLOBAL CONTROL PLANE</span><h1>Internet observatory</h1><p>Every pulse is a real routing observation.</p></div><div className="session-info"><span><i className="dot"/>{number(data?.global_total??0)} UPDATEs received</span><span>{data?.collectors.length??0} active collectors in this view</span></div></div>
+    <form className="filter-bar" onSubmit={e=>{e.preventDefault();apply()}}><span className="filter-label"><SlidersHorizontal size={14}/> SCOPE</span><label>Collector<select value={draft.collector} onChange={e=>setDraft(d=>({...d,collector:e.target.value}))}><option value="">All collectors</option>{collectors.map(c=><option key={c} value={c}>{collectorName(c)}</option>)}</select></label><label>ASN<input placeholder="All ASNs" value={draft.asn} onChange={e=>setDraft(d=>({...d,asn:e.target.value}))} inputMode="numeric"/></label><label className="prefix-filter">Prefix<input placeholder="Exact CIDR · any prefix" value={draft.prefix} onChange={e=>setDraft(d=>({...d,prefix:e.target.value}))}/></label><label>Time window<select value={draft.window} onChange={e=>setDraft(d=>({...d,window:Number(e.target.value)}))}><option value={60}>Last 60 seconds</option><option value={300}>Last 5 minutes</option></select></label><button type="submit" className="apply-button">Apply scope <ChevronRight size={12}/></button><button type="button" className="reset-button" onClick={()=>{setFilters(defaults);setDraft(defaults);setFormError('')}}><RotateCcw size={12}/>Reset Filters</button></form>
+    {(formError||error)&&<div className="notice">{formError||error}</div>}
+-   {!live&&<div className="notice">{transport?'RIS transport disconnected · reconnecting automatically.':'Connecting to the live observatory…'} {data?.error}</div>}
++   {!live&&<div className="notice">{connection==='stale'?'Snapshots are delayed · showing the last received data.':connection==='disconnected'?'Upstream disconnected or scope unavailable · see connection details.':'Reconnecting to the live observatory…'} {data?.error}</div>}
+    <div className="scope-summary"><span>{filters.collector||filters.asn||filters.prefix?'FILTERED LIVE OBSERVATIONS':'ALL RIS UPDATE OBSERVATIONS'} · {filters.window===60?'60 SECOND':'5 MINUTE'} WINDOW{filters.asn&&` · AS${filters.asn}`}{filters.prefix&&` · ${filters.prefix}`}</span><span>{(data?.coverage_seconds??0)<filters.window?`Collecting history: ${data?.coverage_seconds??0}/${filters.window}s`:'Full rolling window'}{data?.limited?' · ASN/edge budgets reached; rankings are bounded':''}</span></div>
+    <section className="kpis">
+     <div className="kpi"><div className="kpi-top">UPDATES / MIN<Activity size={16}/></div><div className="kpi-value"><AnimatedNumber value={data?.updates_per_minute??0}/></div><Comparison current={data?.updates_per_minute??0} previous={data?.previous?.updates_per_minute}/><div className="kpi-detail">{number(data?.updates_per_second??0)} per second · last complete bucket</div></div>
+@@ -39,7 +40,7 @@
+     <div className="kpi blue"><div className="kpi-top">AVG. AS PATH<Network size={16}/></div><div className="kpi-value"><AnimatedNumber value={data?.average_path_length??0} decimals={2}/><small>hops</small></div><Comparison current={data?.average_path_length??0} previous={data?.previous?.average_path_length}/><div className="kpi-detail">Reported AS segments · includes prepends</div></div>
+    </section>
+    <div className="hero-row"><Topology source={data?.topology} timestamp={data?.timestamp??0} window={filters.window} onWindow={updateWindow} scope={scope}/><div className="hero-sidebar"><ActivityIndex data={data}/><Ranking data={data}/></div></div>
+-   <div className="signals-row"><Heartbeat key={scope} data={data}/><section className="panel dynamics"><Heading title="Announcement / withdrawal" subtitle="Prefix operations · last 60 seconds"/><div className="legend"><span><i className="dot"/> Announcements</span><span><i className="dot orange-dot"/> Withdrawals</span></div><div className="bar-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={data?.heartbeat??[]} margin={{left:-20,right:10,top:10}}><CartesianGrid stroke="#1b2936" vertical={false} strokeDasharray="3 6"/><XAxis dataKey="timestamp" tickFormatter={time} minTickGap={65} tick={{fill:'#647b8e',fontSize:9}} axisLine={false} tickLine={false}/><YAxis tick={{fill:'#647b8e',fontSize:9}} axisLine={false} tickLine={false}/><Tooltip contentStyle={chartTooltip} labelFormatter={v=>time(Number(v))}/><Bar dataKey="announcements" stackId="ops" fill="#50bca5" isAnimationActive={false}/><Bar dataKey="withdrawals" stackId="ops" fill="#dc9466" isAnimationActive={false}/></BarChart></ResponsiveContainer></div></section></div>
++   <div className="signals-row"><Heartbeat key={scope} data={data}/><Dynamics rows={data?.heartbeat}/></div>
+    <Heatmap data={data}/>
+    <div className="feeds-row"><EventWaterfall key={scope} data={data}/><section className="panel anomaly-panel"><Heading title="Routing observations" subtitle="Explainable heuristics · not attack attribution" badge={`${data?.anomalies.length??0} SIGNALS`}/><div className="anomaly-feed"><>{data?.anomalies.slice(0,20).map(a=><motion.article key={a.id} layout initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0}} transition={{duration:.25}} className={`anomaly ${a.severity.toLowerCase()}`}><div className="anomaly-meta"><span><TriangleAlert size={11}/>{a.type}</span><span className="severity">{a.severity}</span></div><p>{a.explanation}</p><div className="anomaly-context mono"><time>{milliseconds(a.timestamp)}</time><span>{a.prefix??(a.asn?`AS${a.asn}`:'All observed routes')}</span></div></motion.article>)}</>{!data?.anomalies.length&&<div className="empty"><TriangleAlert size={20}/><b>No signals in this window</b><span>Monitoring update bursts, flaps, path length and origin changes. Quiet is a valid observation.</span></div>}</div></section></div>
+    <footer><span><Radio size={11}/> Actual RIPE RIS observations · receipt-time aggregation</span><span>Bounded memory · 1 Hz snapshots · no synthetic traffic</span></footer>
+@@ -60,7 +61,11 @@
+ 
+ function EventWaterfall({data}:{data:Snapshot|null}){
+  const [paused,setPaused]=useState(false),[frozen,setFrozen]=useState<BGPEvent[]>([]),[filter,setFilter]=useState('ALL'),[search,setSearch]=useState('');
++ const reduced=useReducedMotion(),pausedAt=useRef(0);const [sourceCounterReset,setSourceCounterReset]=useState(false);
++ useEffect(()=>{if(paused&&data&&data.total_received<pausedAt.current)setSourceCounterReset(true)},[paused,data?.total_received]);
++ const newEvents=paused?Math.max(0,(data?.total_received??pausedAt.current)-pausedAt.current):0;
++ const counterReset=paused&&(sourceCounterReset||!!data&&data.total_received<pausedAt.current);
+  const events=(paused?frozen:data?.events??[]).filter(e=>(filter==='ALL'||(filter==='ANNOUNCE'?e.announcements>0:e.withdrawals>0))&&(!search||e.prefixes.some(p=>p.includes(search)))).slice(0,40);
+- const toggle=()=>{if(!paused)setFrozen(data?.events??[]);setPaused(p=>!p)};
+- return <section className="panel events"><Heading title="Live event waterfall" subtitle="Collector timestamps · most recent observed UPDATEs" badge={paused?'PAUSED':'STREAMING'}/><div className="event-controls"><div className="segmented">{['ALL','ANNOUNCE','WITHDRAW'].map(f=><button key={f} className={filter===f?'active':''} onClick={()=>setFilter(f)}>{f}</button>)}</div><label className="event-search"><Search size={12}/><input aria-label="Search event prefixes" placeholder="Search prefixes…" value={search} onChange={e=>setSearch(e.target.value)}/></label><button onClick={toggle} className={paused?'active event-pause':'event-pause'}>{paused?<Play size={12}/>:<Pause size={12}/>} {paused?'Resume':'Pause'}</button></div><div className="event-head"><span>TIME</span><span>OPERATION</span><span>PREFIX / PEER</span><span>AS PATH</span><span>RRC</span></div><div className="event-scroll"><>{events.map(e=><motion.div layout="position" initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0,transition:{duration:.12}}} transition={{duration:.22}} className="event" key={e.id}><span className="mono muted">{milliseconds(e.timestamp)}</span><span className={`event-tag ${e.announcements?'announce':'withdraw'}`}>{e.announcements&&e.withdrawals?'MIXED':e.announcements?'ANNOUNCE':e.withdrawals?'WITHDRAW':'UPDATE'}</span><span className="event-prefix"><b title={e.prefixes.join(', ')}>{e.prefixes[0]??'No prefix operation'}</b><small>AS{e.peer_asn}{e.announcements+e.withdrawals>1?` · +${e.announcements+e.withdrawals-1} prefixes`:''}</small></span><span className="path" title={JSON.stringify(e.path)}><b>PATH {e.path.length}</b><small>{e.path.map(p=>Array.isArray(p)?`{${p.join(',')}}`:p).join(' → ')||'—'}</small></span><span className="collector-tag" title={e.collector}>{collectorName(e.collector)}</span></motion.div>)}</>{!events.length&&<div className="empty">No recent events match this view</div>}</div><div className="event-foot">{events.length} visible events · capped at 40 <span>{paused?'Capture paused · ingestion continues':'Newest first · live observations'}</span></div></section>
++ const toggle=()=>{setSourceCounterReset(false);if(!paused){setFrozen(data?.events??[]);pausedAt.current=data?.total_received??0}setPaused(p=>!p)};
++ return <section className="panel events"><Heading title="Live event waterfall" subtitle="Collector timestamps · most recent observed UPDATEs" badge={paused?'PAUSED':'STREAMING'}/>{paused&&<div className="paused-counter" title="All new events in this scope, before local search and operation filters. Resume shows the latest events.">{counterReset?'Source counter reset · resume for current events':`${number(newEvents)} new events in this scope while paused`}</div>}<div className="event-controls"><div className="segmented">{['ALL','ANNOUNCE','WITHDRAW'].map(f=><button key={f} className={filter===f?'active':''} onClick={()=>setFilter(f)}>{f}</button>)}</div><label className="event-search"><Search size={12}/><input aria-label="Search event prefixes" placeholder="Search prefixes…" value={search} onChange={e=>setSearch(e.target.value)}/></label><button onClick={toggle} className={paused?'active event-pause':'event-pause'}>{paused?<Play size={12}/>:<Pause size={12}/>} {paused?'Resume':'Pause'}</button></div><div className="event-head"><span>TIME</span><span>OPERATION</span><span>PREFIX / PEER</span><span>AS PATH</span><span>RRC</span></div><div className="event-scroll"><>{events.map(e=><motion.div layout={reduced?false:'position'} initial={reduced?false:{opacity:0,y:-6}} animate={{opacity:1,y:0}} transition={{duration:reduced?0:.18}} className="event" key={e.id}><span className="mono muted">{milliseconds(e.timestamp)}</span><span className={`event-tag ${e.announcements&&e.withdrawals?'mixed':e.announcements?'announce':'withdraw'}`}>{e.announcements&&e.withdrawals?'MIXED':e.announcements?'ANNOUNCE':e.withdrawals?'WITHDRAW':'UPDATE'}</span><span className="event-prefix"><b title={e.prefixes.join(', ')}>{e.prefixes[0]??'No prefix operation'}</b><small>AS{e.peer_asn}{e.announcements+e.withdrawals>1?` · +${e.announcements+e.withdrawals-1} prefixes`:''}</small></span><span className="path" title={JSON.stringify(e.path)}><b>PATH {e.path.length}</b><small>{e.path.map(p=>Array.isArray(p)?`{${p.join(',')}}`:p).join(' → ')||'—'}</small></span><span className="collector-tag" title={e.collector}>{collectorName(e.collector)}</span></motion.div>)}</>{!events.length&&<div className="empty">No recent events match this view</div>}</div><div className="event-foot">{events.length} visible events · capped at 40 <span>{paused?'Capture paused · ingestion continues':'Newest first · live observations'}</span></div></section>
+ }
+--- before/frontend/src/Heartbeat.tsx
++++ after/frontend/src/Heartbeat.tsx
+@@ -1,31 +1,33 @@
+-import {useRef,useState} from 'react';
+-import {motion} from 'framer-motion';
++import {memo,useCallback,useMemo,useRef,useState,type PointerEvent} from 'react';
++import {motion,useReducedMotion} from 'framer-motion';
+ import {Activity} from 'lucide-react';
+ import type {Snapshot} from './types';
+-import {number,time} from './types';
++import {compactNumber,number,time} from './types';
+ 
+-export default function Heartbeat({data}:{data:Snapshot|null}){
+- const [hover,setHover]=useState<number|null>(null);
++export default memo(function Heartbeat({data}:{data:Snapshot|null}){
++ const [hover,setHover]=useState<number|null>(null);const reduced=useReducedMotion();
+  const previous=useRef<Snapshot['heartbeat']>([]),stamp=useRef(0),dropped=useRef<Snapshot['heartbeat'][number]|null>(null);
+  const rows=data?.heartbeat??[];
+  if(data&&stamp.current!==data.timestamp){dropped.current=previous.current[0]??rows[0];previous.current=rows;stamp.current=data.timestamp}
+- const points=rows.length?[dropped.current??rows[0],...rows]:[];
++ const points=useMemo(()=>rows.length?[dropped.current??rows[0],...rows]:[],[rows]);
+  const max=Math.max(100,...rows.map(r=>r.updates),data?.rolling_average??0)*1.15;
+  const step=1000/59,y=(n:number)=>180-n/max*160;
+- const path=points.map((p,i)=>`${i?'L':'M'}${i*step},${y(p.updates)}`).join(' ');
++ const path=useMemo(()=>points.map((p,i)=>`${i?'L':'M'}${i*step},${180-p.updates/max*160}`).join(' '),[points,max,step]);
+  const hovered=hover===null?null:rows[hover];
++ const inspectPoint=useCallback((e:PointerEvent<HTMLDivElement>)=>{const rect=e.currentTarget.getBoundingClientRect();setHover(Math.min(59,Math.max(0,Math.round((e.clientX-rect.left)/rect.width*59))))},[]);
+  return <section className="panel heartbeat-panel"><div className="section-heading"><div><div className="eyebrow"><Activity size={12}/> INTERNET HEARTBEAT</div><h2>Routing never sleeps.</h2></div><span className="badge">60s · 1s RESOLUTION</span></div>
+   <div className="rate-line"><strong>{number(data?.updates_per_second??0)}<small> updates / sec</small></strong><div>ROLLING AVG <b>{number(data?.rolling_average??0)}</b><span className="tiny muted">{data?.baseline_ready?'59-second baseline':'Baseline warming up'}</span></div></div>
+-  <div className="seismograph" onMouseLeave={()=>setHover(null)} onMouseMove={e=>{const rect=e.currentTarget.getBoundingClientRect();setHover(Math.min(59,Math.max(0,Math.round((e.clientX-rect.left)/rect.width*59))))}}>
++  <div className="seismograph" tabIndex={0} aria-label="Inspect heartbeat: use left and right arrows for timestamps and updates per second" onBlur={()=>setHover(null)} onKeyDown={e=>{if(['ArrowLeft','ArrowRight','Home','End'].includes(e.key)){e.preventDefault();setHover(h=>e.key==='Home'?0:e.key==='End'?59:Math.min(59,Math.max(0,(h??59)+(e.key==='ArrowLeft'?-1:1))))}}} onPointerLeave={e=>{if(e.pointerType!=='touch')setHover(null)}} onPointerMove={inspectPoint} onPointerDown={inspectPoint}>
+    <svg viewBox="0 0 1000 200" preserveAspectRatio="none" role="img" aria-label="Real observed BGP updates per second over the last 60 seconds">
+     <defs><clipPath id="heartbeat-clip"><rect width="1000" height="200"/></clipPath><linearGradient id="heartbeat-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor="#57d9bd" stopOpacity=".13"/><stop offset="1" stopColor="#57d9bd" stopOpacity="0"/></linearGradient></defs>
+-    {[0,.25,.5,.75,1].map(v=><g key={v}><line x1="0" x2="1000" y1={y(max*v)} y2={y(max*v)} stroke="#1b2936" strokeDasharray="3 6"/><text x="4" y={y(max*v)-4} fill="#52677a" fontSize="10">{number(Math.round(max*v))}</text></g>)}
++    {[0,.25,.5,.75,1].map(v=><g key={v}><line x1="0" x2="1000" y1={y(max*v)} y2={y(max*v)} stroke="#1b2936" strokeDasharray="3 6"/></g>)}
+     {data&&<line x1="0" x2="1000" y1={y(data.rolling_average)} y2={y(data.rolling_average)} stroke="#a1b1bd" strokeOpacity=".3" strokeDasharray="5 5"/>}
+-    <g clipPath="url(#heartbeat-clip)"><motion.g key={rows.at(-1)?.timestamp??0} initial={{x:0}} animate={{x:-step}} transition={{duration:.9,ease:'linear'}}><path d={`${path} L${60*step},180 L0,180 Z`} fill="url(#heartbeat-fill)"/><path d={path} fill="none" stroke="#69dfc2" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>{points.map((p,i)=>p.spike!==null?<circle key={`${p.timestamp}-${i}`} cx={i*step} cy={y(p.updates)} r="3.5" fill="#f0ab72"/>:null)}</motion.g></g>
++    <g clipPath="url(#heartbeat-clip)"><motion.g key={rows.at(-1)?.timestamp??0} initial={{x:reduced?-step:0}} animate={{x:-step}} transition={{duration:reduced?0:.9,ease:'linear'}}><path d={`${path} L${60*step},180 L0,180 Z`} fill="url(#heartbeat-fill)"/><path d={path} fill="none" stroke="#69dfc2" strokeWidth="1.8" vectorEffect="non-scaling-stroke"/>{points.map((p,i)=>p.spike!==null?<circle key={`${p.timestamp}-${i}`} cx={i*step} cy={y(p.updates)} r="3.5" fill="#f0ab72"/>:null)}</motion.g></g>
+     {hovered&&<><line x1={hover!*step} x2={hover!*step} y1="0" y2="180" stroke="#92aebe" strokeOpacity=".5"/><circle cx={hover!*step} cy={y(hovered.updates)} r="4" fill="#d8fff1"/></>}
+    </svg>
+-   {hovered&&<div className="heartbeat-tooltip" style={{left:`${Math.min(76,Math.max(2,hover!/59*100))}%`}}><b>{time(hovered.timestamp)}</b><span>{number(hovered.updates)} updates/sec</span>{hovered.spike!==null&&<em>Above spike threshold</em>}</div>}
++   <div className="heartbeat-axis" aria-hidden="true">{[0,.25,.5,.75,1].map(v=><span key={v} style={{top:`${y(max*v)/2}%`}}>{compactNumber(Math.round(max*v))}</span>)}</div>
++   {hovered&&<div role="status" aria-live="off" className="heartbeat-tooltip" style={{left:`${Math.min(98,Math.max(2,hover!/59*100))}%`,transform:hover!>=30?'translateX(-100%)':undefined}}><b>{time(hovered.timestamp)} · local time</b><span>{number(hovered.updates)} updates/sec</span>{hovered.spike!==null&&<em>Above spike threshold</em>}</div>}
+   </div>
+   <div className="chart-time"><span>{rows[0]?time(rows[0].timestamp):'—'}</span><span className="heartbeat-key"><i className="dot"/> Updates <i className="dot orange-dot"/> Detected spikes</span><span>{rows.at(-1)?time(rows.at(-1)!.timestamp):'—'}</span></div>
+  </section>
+-}
++});
+--- before/frontend/src/Topology.tsx
++++ after/frontend/src/Topology.tsx
+@@ -1,4 +1,4 @@
+-import {useEffect,useMemo,useRef,useState} from 'react';
++import {memo,useEffect,useMemo,useRef,useState} from 'react';
+ import ForceGraph2D, {type ForceGraphMethods} from 'react-force-graph-2d';
+ import {useReducedMotion} from 'framer-motion';
+ import {Crosshair,Network,Pause,Radio} from 'lucide-react';
+@@ -10,7 +10,7 @@
+ const edgeId=(l:ASLink)=>`${id(l.source)}:${id(l.target)}`;
+ const nodeRadius=(n:ASNode)=>5+Math.min(10,Math.log10(n.updates+1)*2);
+ 
+-export default function Topology({source,timestamp,window,onWindow,scope}:{source:TopologyData|undefined;timestamp:number;window:number;onWindow:(n:number)=>void;scope:string}){
++export default memo(function Topology({source,timestamp,window,onWindow,scope}:{source:TopologyData|undefined;timestamp:number;window:number;onWindow:(n:number)=>void;scope:string}){
+  const container=useRef<HTMLDivElement>(null),fg=useRef<ForceGraphMethods<ASNode,ASLink>|undefined>(undefined);
+  const [width,setWidth]=useState(800),[paused,setPaused]=useState(false),[selection,setSelection]=useState<string|null>(null),[hover,setHover]=useState<ASNode|null>(null);
+  const [graph,setGraph]=useState<TopologyData>({nodes:[],links:[]});
+@@ -69,8 +69,10 @@
+   fg.current?.d3Force('gather',gather);
+  },[]);
+  useEffect(()=>{needsFit.current=true;layoutAspect.current=Math.max(1,Math.min(2.5,width/height))},[width]);
++ const adjacency=useMemo(()=>{const map=new Map(graph.nodes.map(n=>[n.id,new Set<string>()]));for(const l of graph.links){map.get(id(l.source))?.add(id(l.target));map.get(id(l.target))?.add(id(l.source))}return map},[graph]);
++ const focusId=selection??hover?.id;
+  // Stop simulation ticks while paused; keep canvas picking and camera controls active.
+- const neighbors=useMemo(()=>{const set=new Set<string>();if(selection){set.add(selection);graph.links.forEach(l=>{if(id(l.source)===selection)set.add(id(l.target));if(id(l.target)===selection)set.add(id(l.source))})}return set},[selection,graph]);
++ const neighbors=useMemo(()=>new Set(focusId?[focusId,...(adjacency.get(focusId)??[])]:[]),[focusId,adjacency]);
+  const important=useMemo(()=>new Set([...graph.nodes].sort((a,b)=>b.updates-a.updates).slice(0,10).map(n=>n.id)),[graph]);
+  // Sample only recent observed adjacency; at most 24 edges and 30 canvas particles.
+  const flow=useMemo(()=>new Map(graph.links.filter(l=>timestamp-l.last_seen<4).sort((a,b)=>b.value-a.value).slice(0,24).map((l,i)=>[edgeId(l),i<6?2:1])),[graph,timestamp]);
+@@ -99,21 +101,21 @@
+    <ForceGraph2D ref={fg} width={width} height={height} graphData={graph} backgroundColor="rgba(0,0,0,0)" cooldownTicks={paused?0:70} d3AlphaDecay={.04} d3VelocityDecay={.35}
+     onNodeDrag={()=>{camera.current.manual=true}}
+     onEngineTick={()=>frame()} onEngineStop={()=>frame(true)}
+-    nodeLabel={()=>''} onNodeHover={n=>setHover(n??null)} onNodeClick={n=>setSelection(n.id)} onBackgroundClick={()=>setSelection(null)}
+-    nodeCanvasObject={(n,ctx,scale)=>{const x=n.x??0,y=n.y??0,r=radius(n)/Math.max(.5,Math.sqrt(scale));const focus=neighbors.has(n.id),dim=selection&&!focus;
++    nodeLabel={()=>''} onNodeHover={n=>setHover(n??null)} onNodeClick={n=>setSelection(n.id)} onBackgroundClick={()=>{setSelection(null);setHover(null)}}
++    nodeCanvasObject={(n,ctx,scale)=>{const x=n.x??0,y=n.y??0,r=radius(n)/Math.max(.5,Math.sqrt(scale));const focus=neighbors.has(n.id),dim=!!focusId&&!focus;
+      const age=Math.max(0,clock.current-n.last_seen),fresh=freshness(n.last_seen);ctx.globalAlpha=dim?.16:Math.max(.45,fresh);
+      if(age<5&&!paused&&!reducedMotion&&important.has(n.id)){const wave=(performance.now()%1600)/1600;ctx.beginPath();ctx.arc(x,y,r+wave*7,0,Math.PI*2);ctx.strokeStyle=`rgba(91,215,194,${(1-wave)*.45})`;ctx.lineWidth=.7;ctx.stroke()}
+-     ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=focus||hover?.id===n.id?'#c1fff0':important.has(n.id)?'#65dfc9':'#3a8d99';ctx.fill();
++     ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fillStyle=n.id===selection?'#b5ffe6':hover?.id===n.id?'#d8fff4':focus?'#78d7c6':important.has(n.id)?'#65dfc9':'#3a8d99';ctx.fill();
+      if(focus||hover?.id===n.id){ctx.strokeStyle='#7af2d2';ctx.lineWidth=1.6/scale;ctx.stroke()}
+      if(important.has(n.id)||hover?.id===n.id||n.id===selection){ctx.globalAlpha=dim?.15:.95;ctx.font=`${11/scale}px ui-monospace, monospace`;ctx.lineWidth=3/scale;ctx.strokeStyle='#0d151d';ctx.strokeText(`AS${n.id}`,x+r+4/scale,y+3/scale);ctx.fillStyle='#c3d9e2';ctx.fillText(`AS${n.id}`,x+r+4/scale,y+3/scale)}ctx.globalAlpha=1;
+     }}
+     nodePointerAreaPaint={(n,color,ctx)=>{ctx.fillStyle=color;ctx.beginPath();ctx.arc(n.x??0,n.y??0,radius(n)/Math.max(.5,Math.sqrt(fg.current?.zoom()??1))+4,0,2*Math.PI);ctx.fill()}}
+-    linkColor={l=>{const focus=selection&&(id(l.source)===selection||id(l.target)===selection);if(selection&&!focus)return 'rgba(56,88,109,.09)';const fresh=freshness(l.last_seen);return `rgba(${focus?'137,245,215':'85,166,172'},${focus?.9:.18+fresh*.5})`}}
+-    linkWidth={l=>Math.min(2.7,.65+Math.log10(l.value+1)*.45)} linkDirectionalParticles={l=>!paused&&!reducedMotion&&clock.current-l.last_seen<4&&(!selection||id(l.source)===selection||id(l.target)===selection)?flow.get(edgeId(l))??0:0} linkDirectionalParticleWidth={2} linkDirectionalParticleSpeed={l=>.0025+Math.min(.0015,Math.log10(l.value+1)*.0003)} linkDirectionalParticleColor={()=>'#b7f5e1'}/>
++    linkColor={l=>{const focus=focusId&&(id(l.source)===focusId||id(l.target)===focusId);if(focusId&&!focus)return 'rgba(56,88,109,.09)';const fresh=freshness(l.last_seen);return `rgba(${focus?'137,245,215':'85,166,172'},${focus?.9:.18+fresh*.5})`}}
++    linkWidth={l=>Math.min(2.7,.65+Math.log10(l.value+1)*.45)+(focusId&&(id(l.source)===focusId||id(l.target)===focusId)?.6:0)} linkDirectionalParticles={l=>!paused&&!reducedMotion&&clock.current-l.last_seen<4&&(!selection||id(l.source)===selection||id(l.target)===selection)?flow.get(edgeId(l))??0:0} linkDirectionalParticleWidth={2} linkDirectionalParticleSpeed={l=>.0025+Math.min(.0015,Math.log10(l.value+1)*.0003)} linkDirectionalParticleColor={()=>'#b7f5e1'}/>
+    {!graph.nodes.length&&<div className="graph-empty"><Network size={26}/><span>Awaiting observed AS paths</span></div>}
+    <div className="graph-stats"><div><b>{graph.nodes.length}</b><span>VISIBLE ASNs</span></div><div><b>{graph.links.length}</b><span>OBSERVED EDGES</span></div></div>
+-   {(hover||selection)&&<div className="node-inspector">{(()=>{const n=inspected;return n?<><span className="eyebrow">{hover?'HOVERED ASN':'SELECTED NEIGHBORHOOD'}</span><b>AS{n.id}</b>{organization&&<span className="asn-organization">{organization}</span>}<span>{number(n.updates)} recent updates</span><span>{n.connections} visible connections</span></>:null})()}</div>}
+-   <div className="graph-caption"><span><i className={paused?'dot paused-dot':'dot'}/>{paused?'SNAPSHOT PAUSED':'LIVE PATH OBSERVATIONS'}</span><span>{selection?<button onClick={()=>setSelection(null)}>Clear AS{selection} selection</button>:'Sampled activity (undirected) | click to inspect | scroll to zoom'}</span></div>
++   {(hover||selection)&&<div className="node-inspector">{(()=>{const n=inspected;return n?<><span className="eyebrow">{hover?'HOVERED ASN':'SELECTED NEIGHBORHOOD'}</span><b>AS{n.id}</b>{organization&&<span className="asn-organization">{organization}</span>}<span>{number(n.updates)} recent updates</span><span>{adjacency.get(n.id)?.size??0} observed neighbors in this view</span><span className="neighbor-list" title={[...(adjacency.get(n.id)??[])].map(a=>`AS${a}`).join(', ')}>{[...(adjacency.get(n.id)??[])].slice(0,6).map(a=>`AS${a}`).join(' · ')}{(adjacency.get(n.id)?.size??0)>6?` · +${adjacency.get(n.id)!.size-6} more`:''}</span></>:null})()}</div>}
++   <div className="graph-caption"><span><i className={paused?'dot paused-dot':'dot'}/>{paused?'SNAPSHOT PAUSED':'LIVE PATH OBSERVATIONS'}</span><span>{selection?<button onClick={()=>{setSelection(null);setHover(null)}}>Clear AS{selection} selection</button>:'Sampled activity (undirected) | click to inspect | scroll to zoom'}</span></div>
+   </div>
+  </section>
+-}
++});
+--- before/frontend/src/usePulse.ts
++++ after/frontend/src/usePulse.ts
+@@ -1,18 +1,25 @@
+ import {useEffect,useState} from 'react';
+ import type {Filters,Snapshot} from './types';
++import {snapshotState,type ConnectionState} from './connectionState';
+ 
+ export function usePulse(filters:Filters){
+  const [data,setData]=useState<Snapshot|null>(null),[transport,setTransport]=useState(false),[error,setError]=useState('');
++ const [connection,setConnection]=useState<ConnectionState>('reconnecting'),[lastSnapshotAt,setLastSnapshotAt]=useState<number|null>(null);
+  useEffect(()=>{
+-  let stopped=false;let socket:WebSocket;let retry:ReturnType<typeof setTimeout>;let last=0;
+-  setData(null);setTransport(false);setError('');
++  let stopped=false;let socket:WebSocket|undefined;let retry:ReturnType<typeof setTimeout>|undefined;let last=0;let upstream=false;
++  setData(null);setTransport(false);setError('');setConnection('reconnecting');setLastSnapshotAt(null);
+   const query=new URLSearchParams(Object.entries(filters).map(([k,v])=>[k,String(v)]));
+-  function open(){if(stopped)return;last=0;socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws?${query}`);
+-   socket.onmessage=e=>{try{const value=JSON.parse(e.data) as Snapshot;if(!Array.isArray(value.heartbeat)||!value.activity)return;setData(value);setTransport(true);setError('');last=Date.now()}catch{setError('Invalid dashboard snapshot')}};
+-   socket.onclose=e=>{setTransport(false);if(e.code===1008||e.code===1013)setError(e.reason||'Filter unavailable. Reset filters and retry.');if(!stopped&&e.code!==1008)retry=setTimeout(open,e.code===1013?10000:2000)};
+-   socket.onerror=()=>socket.close();
+-  }open();const watchdog=setInterval(()=>{if(last&&Date.now()-last>5000){setTransport(false);socket.close()}},2000);
+-  return()=>{stopped=true;clearTimeout(retry);clearInterval(watchdog);socket.close()};
++  function open(){if(stopped)return;last=0;setConnection('reconnecting');socket=new WebSocket(`${location.protocol==='https:'?'wss':'ws'}://${location.host}/ws?${query}`);
++   const current=socket;
++   current.onmessage=e=>{if(stopped||current!==socket)return;try{const value=JSON.parse(e.data) as Snapshot;if(!Array.isArray(value.heartbeat)||!value.activity)return;last=Date.now();upstream=value.connected;setData(value);setTransport(true);setError('');setLastSnapshotAt(last);setConnection(snapshotState(upstream,0))}catch{setError('Invalid dashboard snapshot')}};
++   current.onclose=e=>{if(stopped||current!==socket)return;setTransport(false);setConnection(e.code===1008?'disconnected':'reconnecting');if(e.code===1008||e.code===1013)setError(e.reason||'Filter unavailable. Reset filters and retry.');if(e.code!==1008)retry=setTimeout(open,e.code===1013?10000:2000)};
++   current.onerror=()=>current.close();
++  }
++  open();
++  const watchdog=setInterval(()=>{
++   if(last&&socket?.readyState===WebSocket.OPEN){const age=Date.now()-last;setConnection(snapshotState(upstream,age));if(age>20000)socket.close()}
++  },1000);
++  return()=>{stopped=true;clearTimeout(retry);clearInterval(watchdog);socket?.close()};
+  },[filters.collector,filters.asn,filters.prefix,filters.window]);
+- return {data,transport,error};
++ return {data,transport,error,connection,lastSnapshotAt};
+ }
+--- before/frontend/src/types.ts
++++ after/frontend/src/types.ts
+@@ -18,4 +18,6 @@
+ export const number = (n:number) => new Intl.NumberFormat('en-US').format(n);
+ export const time = (n:number) => new Date(n*1000).toLocaleTimeString('en-GB', {hour12:false});
+ export const milliseconds = (n:number) => `${time(n)}.${String(Math.floor((n%1)*1000)).padStart(3,'0')}`;
++const compactFormatter=new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:1});
++export const compactNumber=(n:number)=>compactFormatter.format(n);
+ export const collectorName = (name:string) => name.replace(/\.ripe\.net$/, '').toUpperCase();
+--- before/frontend/src/main.tsx
++++ after/frontend/src/main.tsx
+@@ -1,5 +1,6 @@
+ import React from 'react';
+ import ReactDOM from 'react-dom/client';
+ import App from './App';
++import {MotionConfig} from 'framer-motion';
+ import './style.css';
+-ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);
++ReactDOM.createRoot(document.getElementById('root')!).render(<React.StrictMode><MotionConfig reducedMotion="user"><App/></MotionConfig></React.StrictMode>);
+--- before/frontend/src/style.css
++++ after/frontend/src/style.css
+@@ -18,3 +18,9 @@
+ .rank{height:38px}.rank-main>div:first-child{gap:6px}.rank-main>div:first-child>span{flex-shrink:0}
+ @media(max-width:560px){.rank-list{grid-template-columns:repeat(2,minmax(0,1fr))}.rank-main .asn-organization{max-width:100%}}
+ @media(max-width:360px){.filter-bar label:last-of-type{flex-basis:100%}}
++
++/* Focused usability additions; existing panel hierarchy is retained. */
++.tour-trigger{border:1px solid #33524e;border-radius:3px;background:#10221e;color:#99d9c8;padding:6px 9px;font-size:9px;white-space:nowrap}.snapshot-received{font-size:11px;color:#a9bfcc;white-space:nowrap}.snapshot-received small{display:block;font:7px Inter,sans-serif;letter-spacing:.8px;color:#7990a1;margin-top:3px}.status.reconnecting{color:#e1bd78;border-color:#655636}.status.stale{color:#e8a573;border-color:#79533d}.status.disconnected{color:#df9797;border-color:#704348}.topbar-right{gap:16px}.node-inspector{max-width:235px;max-height:calc(100% - 75px);overflow-wrap:anywhere}.neighbor-list{font:8px/1.6 ui-monospace,monospace;max-width:205px;color:#94c8bf}.heartbeat-axis{position:absolute;inset:0;pointer-events:none;font:10px ui-monospace,monospace;color:#8299ab}.heartbeat-axis span{position:absolute;left:4px;transform:translateY(-100%);background:#0d151dbb;padding-right:3px}.heartbeat-tooltip{z-index:2;font-size:10px;left:auto;max-width:calc(100% - 12px)}.paused-counter{padding:0 20px 9px;font:9px/1.5 ui-monospace,monospace;color:#e0bc83}.event-tag.announce{border-left:2px solid #69d7af}.event-tag.withdraw{border-left:2px solid #efa66d}.event-tag.mixed{color:#c3b0ed;background:#272036;border-left:2px solid #bfa0eb}.tour-card{position:fixed;right:18px;bottom:18px;width:330px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;z-index:100;background:#101b25;border:1px solid #4d8273;box-shadow:0 8px 25px #0006;border-radius:4px;padding:14px;outline:none}.tour-heading{display:flex;justify-content:space-between;align-items:center;color:#8bb4a9;font-size:9px;margin-bottom:8px}.tour-heading button{font-size:20px;background:none;color:#a8c1cd;line-height:1;padding:0 3px}.tour-card h2{font-size:14px;color:#d5e9e4}.tour-card p{font-size:11px;line-height:1.65;color:#a6bdca;margin-top:7px}.tour-actions{display:flex;align-items:center;justify-content:space-between;gap:7px;margin-top:12px}.tour-actions button{background:none;color:#9fb8c6;font-size:10px;padding:5px 0}.tour-actions button:disabled{opacity:.35;cursor:default}.tour-actions .tour-next{border:1px solid #426c5f;background:#18382e;padding:5px 10px;border-radius:3px;color:#b8e8d8}.tour-target{outline:1px solid #78bba7;outline-offset:3px;scroll-margin:20px}.seismograph:focus-visible{outline:1px solid #6cddc2;outline-offset:3px}
++@media(max-width:900px){.topbar-right{gap:10px}.snapshot-received{font-size:10px}.snapshot-received small{font-size:6px}.tour-trigger{font-size:8px}}
++@media(max-width:560px){.topbar{height:auto;min-height:58px;flex-wrap:wrap;gap:10px;padding-top:12px;padding-bottom:10px}.topbar-right{width:100%;justify-content:space-between;gap:8px}.tour-trigger{font-size:9px}.status{font-size:8px}.snapshot-received{font-size:10px}.node-inspector{max-width:180px;right:10px}.neighbor-list{max-width:150px;font-size:8px}.paused-counter{padding-left:10px;padding-right:10px;font-size:8px}.heartbeat-tooltip{font-size:9px}.tour-card{right:12px;bottom:12px}}
++.heartbeat-tooltip{width:max-content;max-width:48%;white-space:normal}
+--- before/frontend/src/connectionState.ts
++++ after/frontend/src/connectionState.ts
+@@ -0,0 +1,6 @@
++export type ConnectionState='connected'|'reconnecting'|'disconnected'|'stale';
++
++// Snapshot arrival is independent of BGP traffic volume and backend last_received.
++export function snapshotState(upstreamConnected:boolean,ageMs:number):ConnectionState{
++ return ageMs>8000?'stale':upstreamConnected?'connected':'disconnected';
++}
+--- before/frontend/src/DashboardTour.tsx
++++ after/frontend/src/DashboardTour.tsx
+@@ -0,0 +1,70 @@
++import {useEffect,useRef,useState} from 'react';
++
++import {useReducedMotion} from 'framer-motion';
++
++
++
++const steps=[
++
++ {target:'.filter-bar',title:'Choose your view',text:'Filter real observations by collector, network number (ASN), or exact prefix. Apply scope updates the whole dashboard.'},
++
++ {target:'.kpis',title:'Read the headline activity',text:'These counters describe observed routing updates and prefix operations. The comparison shows the previous window.'},
++
++ {target:'.topology-hero',title:'Explore observed network links',text:'Each dot is an ASN. Hover or select it for its organization and observed neighbors. Drag to pan, scroll to zoom, and use Fit to see the graph again.'},
++
++ {target:'.ranking',title:'Find busy networks',text:'This ranking counts updates containing each ASN. Organization names come from RIPEstat when available.'},
++
++ {target:'.heartbeat-panel',title:'Follow the heartbeat',text:'Each point counts real updates in one second. Hover, tap, or use arrow keys on the chart to inspect a timestamp.'},
++
++ {target:'.dynamics',title:'Compare route operations',text:'Green bars count announcements; amber bars count withdrawals. Hover or tap a bar to see prefix-operation counts.'},
++
++ {target:'.heatmap-panel',title:'Compare collectors',text:'Each row is a collector. Brighter cells mean more updates in that time bucket. The field scrolls horizontally on small screens.'},
++
++ {target:'.events',title:'Inspect individual events',text:'Pause freezes this list while ingestion continues. The new-event count covers this scope before local search and type filters. Resume returns to recent events.'},
++
++ {target:'.anomaly-panel',title:'Read routing observations',text:'These cards explain routing heuristics such as flaps and long paths. A signal is an observation, not proof of an attack.'},
++
++];
++
++
++
++export default function DashboardTour(){
++
++ const [step,setStep]=useState<number|null>(null),[minimized,setMinimized]=useState(false);
++
++ const reduced=useReducedMotion();const trigger=useRef<HTMLButtonElement>(null),card=useRef<HTMLDivElement>(null);
++
++ const close=()=>{setStep(null);setMinimized(false);trigger.current?.focus({preventScroll:true})};
++
++ useEffect(()=>{
++
++  if(step===null)return;
++
++  const target=document.querySelector(steps[step].target);
++
++  target?.classList.add('tour-target');target?.scrollIntoView({behavior:reduced?'instant':'smooth',block:'center'});
++
++  card.current?.focus({preventScroll:true});
++
++  return()=>target?.classList.remove('tour-target');
++
++ },[step,reduced]);
++
++ useEffect(()=>{if(step===null)return;const escape=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!e.defaultPrevented){setStep(null);setMinimized(false);trigger.current?.focus({preventScroll:true})}};document.addEventListener('keydown',escape);return()=>document.removeEventListener('keydown',escape)},[step]);
++
++ return <><button ref={trigger} className="tour-trigger" onClick={()=>{setStep(0);setMinimized(false)}} aria-expanded={step!==null} aria-label="Dashboard Tour">Dashboard Tour</button>
++
++ {step!==null&&<div ref={card} className="tour-card" role="dialog" aria-modal="false" aria-labelledby="tour-title" tabIndex={-1}>
++
++  <div className="tour-heading"><span>Dashboard Tour · {step+1}/{steps.length}</span><button onClick={close} aria-label="Exit dashboard tour">×</button></div>
++
++  <h2 id="tour-title">{steps[step].title}</h2>
++
++  {!minimized&&<p>{steps[step].text}</p>}
++
++  <div className="tour-actions"><button onClick={close}>Skip tour</button><button onClick={()=>setMinimized(v=>!v)}>{minimized?'Expand':'Minimize'}</button><button disabled={step===0} onClick={()=>setStep(s=>s! - 1)}>Back</button><button className="tour-next" onClick={()=>step===steps.length-1?close():setStep(s=>s!+1)}>{step===steps.length-1?'Done':'Next'}</button></div>
++
++ </div>}</>;
++
++}
++
+--- before/frontend/src/Dynamics.tsx
++++ after/frontend/src/Dynamics.tsx
+@@ -0,0 +1,24 @@
++import {memo} from 'react';
++
++import {ResponsiveContainer,BarChart,Bar,XAxis,YAxis,Tooltip,CartesianGrid} from 'recharts';
++
++import {compactNumber,number,time,type Snapshot} from './types';
++
++const tooltipStyle={background:'#101a24',border:'1px solid #304152',borderRadius:3,color:'#dce7f4',fontSize:11};
++
++
++
++export default memo(function Dynamics({rows}:{rows:Snapshot['heartbeat']|undefined}){
++
++ return <section className="panel dynamics"><div className="section-heading"><div><h2>Announcement / withdrawal</h2><p>Prefix operations · last 60 seconds</p></div></div><div className="legend"><span><i className="dot"/> Announcements</span><span><i className="dot orange-dot"/> Withdrawals</span></div>
++
++ <div className="bar-chart"><ResponsiveContainer width="100%" height="100%"><BarChart data={rows??[]} margin={{left:0,right:12,top:10}} accessibilityLayer>
++
++ <CartesianGrid stroke="#1b2936" vertical={false} strokeDasharray="3 6"/><XAxis dataKey="timestamp" tickFormatter={time} minTickGap={45} tick={{fill:'#8199aa',fontSize:10}} axisLine={false} tickLine={false}/><YAxis tickFormatter={compactNumber} width={44} tick={{fill:'#8199aa',fontSize:10}} axisLine={false} tickLine={false}/>
++
++ <Tooltip contentStyle={tooltipStyle} labelFormatter={v=>`${time(Number(v))} · local time`} formatter={(value,name)=>[`${number(Number(value))} prefix operations`,name==='announcements'?'Announcements':'Withdrawals']}/>
++
++ <Bar dataKey="announcements" stackId="ops" fill="#50bca5" isAnimationActive={false}/><Bar dataKey="withdrawals" stackId="ops" fill="#dc9466" isAnimationActive={false}/></BarChart></ResponsiveContainer></div></section>;
++
++});
++

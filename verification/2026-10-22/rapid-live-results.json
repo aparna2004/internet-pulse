@@ -1,0 +1,194 @@
+{
+  "status": "ready",
+  "error": null,
+  "scope": "Global observed stream; dashboard filters do not apply",
+  "eligible_examples": 16,
+  "minimum_examples": 8,
+  "valid_windows": 21,
+  "excluded_windows": 1,
+  "report": {
+    "created_at": 1792647440,
+    "version": "68d4342b7b2c20c2",
+    "dataset_sha256": "68d4342b7b2c20c2ae7dd17089002e8285965f1d815fdb2f8a793614b44e569c",
+    "target": "RIPE RIS Live observed UPDATE count in the next aligned five-second window",
+    "horizon_seconds": 5,
+    "preliminary": true,
+    "scope": "Global observed stream; dashboard filters do not apply",
+    "feature_names": [
+      "updates_lag_1",
+      "updates_lag_2",
+      "updates_lag_3",
+      "updates_lag_4",
+      "updates_lag_5",
+      "updates_mean_5",
+      "updates_std_5",
+      "updates_min_5",
+      "updates_max_5",
+      "updates_change",
+      "withdrawal_share",
+      "average_path_length",
+      "flaps",
+      "active_collectors",
+      "announcements",
+      "withdrawals"
+    ],
+    "samples": 14,
+    "train_samples": 8,
+    "test_samples": 5,
+    "train_start": 1792647370,
+    "train_end": 1792647410,
+    "test_start": 1792647415,
+    "test_end": 1792647440,
+    "embargo_seconds": 5,
+    "split": "Chronological 70/30; no shuffling or hyperparameter search",
+    "live_fit_samples": 14,
+    "live_fit_label_end": 1792647440,
+    "versions": {
+      "python": "3.12.14",
+      "sklearn": "1.7.2",
+      "numpy": "2.5.4"
+    },
+    "parameters": {
+      "random_forest": {
+        "n_estimators": 80,
+        "max_depth": 8,
+        "min_samples_leaf": 2,
+        "n_jobs": 1,
+        "random_state": 42
+      },
+      "hist_gradient_boosting": {
+        "max_iter": 100,
+        "max_leaf_nodes": 15,
+        "learning_rate": 0.06,
+        "min_samples_leaf": 2,
+        "l2_regularization": 0.1,
+        "early_stopping": false,
+        "random_state": 42
+      }
+    },
+    "scores": {
+      "baseline": {
+        "mae": 3732.4,
+        "rmse": 4675.662819323053,
+        "train_seconds": 0,
+        "inference_ms_per_row": 0,
+        "model_bytes": 0
+      },
+      "random_forest": {
+        "mae": 2003.9931458333363,
+        "rmse": 2893.698751251109,
+        "train_seconds": 0.033844799996586516,
+        "inference_ms_per_row": 0.3187800000887364,
+        "model_bytes": 41303
+      },
+      "hist_gradient_boosting": {
+        "mae": 2459.232716457786,
+        "rmse": 3230.355446655078,
+        "train_seconds": 0.014534799993271008,
+        "inference_ms_per_row": 0.13817999861203134,
+        "model_bytes": 51291
+      }
+    },
+    "best_mae": "random_forest",
+    "insight": "random forest has the lowest holdout MAE, 1,728.4 UPDATEs (46.3%) lower than the baseline. This is an observed-stream forecast, not an outage or attack detector."
+  },
+  "forecasts": [
+    {
+      "origin": 1792647450,
+      "target_end": 1792647455,
+      "generated_at": 1792647450.308756,
+      "version": "68d4342b7b2c20c2",
+      "predictions": {
+        "random_forest": 41647.83383928572,
+        "hist_gradient_boosting": 35034.76208189288,
+        "baseline": 34049
+      },
+      "actual": null,
+      "outcome": "pending"
+    },
+    {
+      "origin": 1792647445,
+      "target_end": 1792647450,
+      "generated_at": 1792647445.26348,
+      "version": "68d4342b7b2c20c2",
+      "predictions": {
+        "random_forest": 39572.39357142857,
+        "hist_gradient_boosting": 34974.28817704895,
+        "baseline": 43284
+      },
+      "actual": 34049,
+      "outcome": "observed"
+    },
+    {
+      "origin": 1792647440,
+      "target_end": 1792647445,
+      "generated_at": 1792647440.5106757,
+      "version": "68d4342b7b2c20c2",
+      "predictions": {
+        "random_forest": 38763.851875,
+        "hist_gradient_boosting": 34708.041249980364,
+        "baseline": 32072
+      },
+      "actual": 43284,
+      "outcome": "observed"
+    },
+    {
+      "origin": 1792647435,
+      "target_end": 1792647440,
+      "generated_at": 1792647435.4415185,
+      "version": "bee0c30157a89de4",
+      "predictions": {
+        "random_forest": 38004.18677083333,
+        "hist_gradient_boosting": 37789.55479858902,
+        "baseline": 39083
+      },
+      "actual": 32072,
+      "outcome": "observed"
+    },
+    {
+      "origin": 1792647430,
+      "target_end": 1792647435,
+      "generated_at": 1792647430.3850815,
+      "version": "bee0c30157a89de4",
+      "predictions": {
+        "random_forest": 38066.99177083333,
+        "hist_gradient_boosting": 39084.598128495454,
+        "baseline": 38355
+      },
+      "actual": 39083,
+      "outcome": "observed"
+    },
+    {
+      "origin": 1792647425,
+      "target_end": 1792647430,
+      "generated_at": 1792647425.3356636,
+      "version": "bee0c30157a89de4",
+      "predictions": {
+        "random_forest": 38324.37177083333,
+        "hist_gradient_boosting": 38718.87654188132,
+        "baseline": 41733
+      },
+      "actual": 38355,
+      "outcome": "observed"
+    }
+  ],
+  "prospective": {
+    "samples": 2,
+    "scores": {
+      "baseline": {
+        "mae": 10223.5,
+        "rmse": 10271.17736678712
+      },
+      "random_forest": {
+        "mae": 5021.770848214284,
+        "rmse": 5046.762111336309
+      },
+      "hist_gradient_boosting": {
+        "mae": 4750.623463534292,
+        "rmse": 6099.31253063101
+      }
+    }
+  },
+  "horizon_seconds": 5,
+  "updated_at": 1792647453.607986
+}

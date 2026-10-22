@@ -1,6 +1,6 @@
 # Internet Pulse
 
-A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, database, Redis, Kafka, or ML.
+A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, Redis, or Kafka. A separate forecasting layer records bounded five-second aggregates in local SQLite and compares two regression models without changing BGP ingestion.
 
 ## Setup
 
@@ -38,7 +38,7 @@ In a second terminal:
 
 ```powershell
 cd frontend
-& 'C:\Users\Aparna\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' node_modules/vite/bin/vite.js --host 127.0.0.1
+& 'C:\Users\hp\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe' node_modules/vite/bin/vite.js --host 127.0.0.1
 ```
 
 Both services are left running after verification. If a port is already occupied by this project, use the existing service or stop its original terminal before starting another instance. See `VERIFICATION.md` for observed test results.
@@ -132,3 +132,28 @@ Origin changes and flaps are intentionally scoped to collector/peer, avoiding fa
 Add prefix drill-down, reliable AS organization enrichment and configurable anomaly thresholds, then benchmark higher client counts. Before public deployment, add authentication, TLS and deployment limits. No organization names are inferred or invented. Historical storage, exhaustive route state and validated incident attribution remain outside this in-memory version.
 
 Protocol reference: [RIPE RIS Live manual](https://ris-live.ripe.net/manual/).
+
+## Routing forecasting comparison — rapid live mode
+
+Random Forest and Histogram Gradient Boosting predict the same **next aligned five-second UPDATE count**, compared with repeating the previous five-second count. The three-hour minimum has been removed. Five completed windows provide the inputs; eight labelled examples allow the first small comparison, normally **65–70 seconds** after a fresh healthy connection. Initial results are explicitly **PRELIMINARY**, not validated accuracy. Predictions need prior observations; errors need the later actual target count. Neither can be measured before those observations exist.
+
+The models use identical lagged counts, mean/std/min/max/change, latest withdrawal share, average path length, flap count, collector count and prefix-operation counts. Evaluation remains chronological 70/30 with a five-second embargo; no shuffled split or future data in the features. Reports expose MAE/RMSE in UPDATE counts per five seconds, measured fit/inference time, model size, exact fixed parameters, feature names, dependency versions, dataset hash and sample counts. At the initial eight-example threshold the holdout has only three observations, so comparisons can change rapidly. The PRELIMINARY flag remains until 180 examples; crossing that threshold is not a guarantee of reliability either.
+
+Both models are refit on all available past labels for prospective forecasting. Evaluations refresh after 30 seconds of new labelled data initially and 60 seconds after 180 examples. This is periodic batch retraining, not online `learn_one` learning. The worker remains separate from ingestion and uses one process/thread. A forecast must be generated within the first two seconds of its five-second window; late forecasts are skipped. Its actual generation time and interval are shown. Later completed actuals are matched to the stored predictions; invalid target capture is excluded.
+
+Only genuine receipt-time aggregates are captured. Startup partials, disconnects and missed sampling intervals are excluded; connected quiet windows can be zero. The rapid dataset is stored separately in ignored `data/forecast-5s.sqlite3`, retaining one day of captured windows, the latest 20 reports and at most 4,326 rows (about six hours) per modelling read. The earlier `data/forecast.sqlite3` minute capture is preserved and is not relabelled or mixed into five-second forecasts. Database table/row names now refer to windows. Scope remains global; dashboard filters do not change model data.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s backend -p "test_*.py" -v
+.\.venv\Scripts\python.exe -m backend.forecast_cli export --output captured-windows.csv
+.\.venv\Scripts\python.exe -m backend.forecast_cli evaluate --output evaluation.json
+```
+
+The CLI, `/api/forecast` and `/api/forecast/report` use the same rapid dataset and definitions. Model metrics are experimental observed-stream forecasts, not attack detection, Internet-wide visibility or outage attribution. A single tiny chronological holdout establishes no predictive advantage; collect more data for an academic conclusion. Local model computation and no simulated observations are used. Sampling sees connection availability every 0.5 s and can miss shorter outages; an upstream stall still marked connected is indistinguishable from quiet activity. Initial imports, connection gaps or worker recovery can extend the normal warm-up.
+
+For a future online-learning comparison, River's online linear regression and Hoeffding Adaptive Tree regressor support incremental updates. These are documented alternatives, **not installed or substituted** by the rapid-window change. A fair evaluation would predict first, wait for the real outcome, update both models' error metrics, and only then train on that outcome.
+
+
+## Deploy from GitHub
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the one-service Render deployment, GitHub checks, and Free-tier versus persistent-storage behavior.

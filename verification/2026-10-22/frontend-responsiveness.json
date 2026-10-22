@@ -1,0 +1,65 @@
+[
+  {
+    "at": 1792641418467,
+    "durationMs": 284,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "5,181,397 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792641555726,
+    "durationMs": 346,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "5,907,661 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792641675521,
+    "durationMs": 23,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "6,436,739 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792641996073,
+    "durationMs": 107,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "8,280,306 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792642236848,
+    "durationMs": 1543,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "9,274,595 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792642518250,
+    "durationMs": 820,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "10,515,498 UPDATEs received23 active collectors in this view"
+  },
+  {
+    "at": 1792642578792,
+    "durationMs": 291,
+    "anomalies": 20,
+    "events": 40,
+    "ranking": 10,
+    "status": "LIVE",
+    "total": "10,772,178 UPDATEs received23 active collectors in this view"
+  }
+]

@@ -1,5 +1,5 @@
 export type BGPEvent = {id:number;timestamp:number;received_at:number;peer_asn:number;collector:string;path:(number|number[])[];announcements:number;withdrawals:number;prefixes:string[];announced_prefixes:string[];withdrawn_prefixes:string[]};
-export type ASNode = {id:string;updates:number;connections:number;last_seen:number;x?:number;y?:number;vx?:number;vy?:number};
+export type ASNode = {id:string;organization?:string;updates:number;connections:number;last_seen:number;x?:number;y?:number;vx?:number;vy?:number};
 export type ASLink = {source:string|ASNode;target:string|ASNode;value:number;last_seen:number};
 export type TopologyData = {nodes:ASNode[];links:ASLink[]};
 export type Filters = {collector:string;asn:string;prefix:string;window:number};
@@ -10,7 +10,7 @@ export type Snapshot = {
  previous:null|{updates:number;updates_per_minute:number;announcements:number;withdrawals:number;average_path_length:number};
  activity:{index:number;level:string;flaps:number};
  heartbeat:{timestamp:number; updates:number; announcements:number; withdrawals:number;spike:number|null}[];
- top_asns:{asn:number; updates:number}[]; collectors:{name:string; updates:number}[];available_collectors:string[];
+ top_asns:{asn:number; organization?:string; updates:number}[]; collectors:{name:string; updates:number}[];available_collectors:string[];
  events:BGPEvent[]; topology:TopologyData;
  anomalies:{id:string;timestamp:number;type:string;severity:string;prefix:string|null;asn:number|null;collector:string|null;explanation:string}[];
  heatmap:{collector:string;values:number[]}[];heatmap_start:number;heatmap_step:number;
@@ -18,4 +18,6 @@ export type Snapshot = {
 export const number = (n:number) => new Intl.NumberFormat('en-US').format(n);
 export const time = (n:number) => new Date(n*1000).toLocaleTimeString('en-GB', {hour12:false});
 export const milliseconds = (n:number) => `${time(n)}.${String(Math.floor((n%1)*1000)).padStart(3,'0')}`;
+const compactFormatter=new Intl.NumberFormat('en-US',{notation:'compact',maximumFractionDigits:1});
+export const compactNumber=(n:number)=>compactFormatter.format(n);
 export const collectorName = (name:string) => name.replace(/\.ripe\.net$/, '').toUpperCase();

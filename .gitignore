@@ -6,3 +6,12 @@ dist/
 *.log
 *.tsbuildinfo
 .env
+data/
+
+.env.*
+
+!.env.example
+
+verification/**/*-before/
+
+verification/**/soak-results.jsonl

@@ -1,0 +1,903 @@
+--- before/backend/main.py
++++ after/backend/main.py
+@@ -10,6 +10,8 @@
+ 
+ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Path
+ from backend.asn_metadata import ASNResolver
++from backend.forecast_service import ForecastService
++from fastapi.responses import JSONResponse
+ from websockets.asyncio.client import connect
+ 
+ log = logging.getLogger("internet-pulse")
+@@ -234,6 +236,7 @@
+ 
+ asn_resolver = ASNResolver()
+ pulse = Pulse()
++forecast_service = ForecastService(pulse)
+ views = {}  # At most four additional live filter aggregates; no raw firehose retention.
+ 
+ 
+@@ -296,12 +299,14 @@
+ async def lifespan(app):
+     task = asyncio.create_task(ingest_loop())
+     metadata_task = asyncio.create_task(asn_resolver.run())
++    forecast_task = asyncio.create_task(forecast_service.run())
+     try:
+         yield
+     finally:
+         task.cancel()
+         metadata_task.cancel()
+-        await asyncio.gather(task, metadata_task, return_exceptions=True)
++        forecast_task.cancel()
++        await asyncio.gather(task, metadata_task, forecast_task, return_exceptions=True)
+ 
+ 
+ app = FastAPI(title="Internet Pulse", lifespan=lifespan)
+@@ -311,6 +316,18 @@
+ async def health():
+     return dict(service="ok", ris_connected=pulse.connected, total_received=pulse.total,
+                 last_received=pulse.last_received, error=pulse.error)
++
++
++@app.get("/api/forecast")
++async def forecast_status():
++    return forecast_service.state
++
++
++@app.get("/api/forecast/report")
++async def forecast_report():
++    if forecast_service.report is None:
++        return JSONResponse(status_code=409, content={"status": "collecting", "message": "No completed evaluation yet"})
++    return forecast_service.report
+ 
+ 
+ @app.get("/api/asn/{asn}")
+--- before/backend/requirements.txt
++++ after/backend/requirements.txt
+@@ -1,3 +1,4 @@
+ fastapi==0.115.12
+ uvicorn==0.34.2
+ websockets==15.0.1
++scikit-learn==1.7.2
+--- before/backend/forecast_data.py
++++ after/backend/forecast_data.py
+@@ -0,0 +1,148 @@
++"""Receipt-time minute aggregates and strictly past-only forecasting features."""
++import hashlib
++import json
++import sqlite3
++from contextlib import contextmanager
++from pathlib import Path
++
++MIN_EXAMPLES = 180
++RETENTION = 14 * 86400
++FEATURES = [*[f"updates_lag_{i}" for i in range(1, 6)], "updates_mean_5", "updates_std_5",
++            "updates_min_5", "updates_max_5", "updates_change", "withdrawal_share",
++            "average_path_length", "flaps", "active_collectors", "announcements", "withdrawals"]
++
++
++def features(rows, origin):
++    """Forecast [origin, origin+60), using only five preceding complete minutes."""
++    by_time = {r['minute']: r for r in rows}
++    past = [by_time.get(origin - i * 60) for i in range(1, 6)]
++    if any(r is None or not r['valid'] for r in past):
++        return None
++    values = [r['updates'] for r in past]
++    mean = sum(values) / 5
++    last = past[0]
++    return values + [mean, (sum((v-mean)**2 for v in values)/5)**.5, min(values), max(values),
++                     values[0]-values[1], last['withdrawals']/max(1, last['announcements']+last['withdrawals']),
++                     last['path_sum']/max(1, last['path_count']), last['flaps'], last['collectors'],
++                     last['announcements'], last['withdrawals']]
++
++
++def examples(rows):
++    # Bounded at three days for predictable training cost.
++    rows = sorted(rows, key=lambda r: r['minute'])[-4326:]
++    output = []
++    for i, row in enumerate(rows):
++        if row['valid']:
++            x = features(rows[max(0, i-5):i], row['minute'])
++            if x is not None:
++                output.append(dict(origin=row['minute'], x=x, y=row['updates']))
++    return output
++
++
++def fingerprint(samples):
++    return hashlib.sha256(json.dumps(samples, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
++
++
++class MinuteSampler:
++    """Copies completed scalar buckets; never called on the per-event ingest path.
++
++    Both ends of each one-second interval must observe an upstream connection.
++    A missed sampling interval invalidates the minute rather than guessing zeros.
++    """
++    def __init__(self):
++        self.previous_second = None
++        self.previous_connected = False
++        self.minute = None
++        self.seconds = 0
++        self.row = None
++        self.collectors = set()
++
++    def sample(self, now, connected, buckets):
++        second = int(now)
++        if self.previous_second == second:
++            # Latch any observed outage, including one shorter than a second.
++            self.previous_connected = self.previous_connected and connected
++            return None
++        completed = second - 1
++        minute = completed // 60 * 60
++        continuous = self.previous_second == completed and self.previous_connected and connected
++        self.previous_second, self.previous_connected = second, connected
++        if self.minute != minute:
++            self.minute = minute
++            self.seconds = 0
++            self.collectors = set()
++            self.row = dict(minute=minute, updates=0, announcements=0, withdrawals=0,
++                            path_sum=0, path_count=0, flaps=0, collectors=0, valid=True, reason='')
++        self.seconds += 1
++        if not continuous:
++            self.row['valid'] = False
++            self.row['reason'] = 'Startup, upstream disconnect, clock change or sampler gap'
++        bucket = next((b for b in reversed(buckets) if b['second'] == completed), None)
++        if bucket:
++            for key in ('updates', 'announcements', 'withdrawals', 'path_sum', 'path_count', 'flaps'):
++                self.row[key] += bucket[key]
++            self.collectors.update(bucket['collectors'])
++        if completed % 60 != 59:
++            return None
++        self.row['valid'] = self.row['valid'] and self.seconds == 60
++        if not self.row['valid'] and not self.row['reason']:
++            self.row['reason'] = 'Incomplete minute'
++        self.row['collectors'] = len(self.collectors)
++        return dict(self.row)
++
++
++class HistoryStore:
++    def __init__(self, path):
++        self.path = Path(path)
++
++    @contextmanager
++    def connect(self):
++        self.path.parent.mkdir(parents=True, exist_ok=True)
++        connection = sqlite3.connect(self.path, timeout=5)
++        try:
++            connection.execute('PRAGMA journal_mode=WAL')
++            connection.execute('CREATE TABLE IF NOT EXISTS minutes (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
++            connection.execute('CREATE TABLE IF NOT EXISTS reports (created INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
++            connection.execute('CREATE TABLE IF NOT EXISTS forecasts (origin INTEGER PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL)')
++            with connection:
++                yield connection
++        finally:
++            connection.close()
++
++    def read(self):
++        with self.connect() as db:
++            rows = [json.loads(r[0]) for r in db.execute('SELECT payload FROM minutes ORDER BY minute DESC LIMIT 4326')][::-1]
++            report = db.execute('SELECT payload FROM reports ORDER BY created DESC LIMIT 1').fetchone()
++            predictions = [json.loads(r[0]) for r in db.execute('SELECT payload FROM forecasts ORDER BY origin DESC LIMIT 120')]
++        return rows, json.loads(report[0]) if report else None, predictions
++
++    def save_minute(self, row):
++        with self.connect() as db:
++            # Never silently replace previously captured history after a clock rollback.
++            db.execute('INSERT OR IGNORE INTO minutes VALUES (?, ?)', (row['minute'], json.dumps(row)))
++            row = json.loads(db.execute('SELECT payload FROM minutes WHERE minute=?', (row['minute'],)).fetchone()[0])
++            pending = db.execute('SELECT origin, payload FROM forecasts WHERE origin=?', (row['minute'],)).fetchone()
++            if pending:
++                prediction = json.loads(pending[1])
++                prediction.update(actual=row['updates'] if row['valid'] else None,
++                                  outcome='observed' if row['valid'] else 'excluded: incomplete target minute')
++                db.execute('UPDATE forecasts SET payload=? WHERE origin=?', (json.dumps(prediction), row['minute']))
++            # A restart or a long sampler gap may mean a target minute was never captured.
++            for origin, payload in db.execute('SELECT origin, payload FROM forecasts WHERE origin < ?', (row['minute'],)).fetchall():
++                prediction = json.loads(payload)
++                if prediction['outcome'] == 'pending':
++                    prediction['outcome'] = 'excluded: missing target capture'
++                    db.execute('UPDATE forecasts SET payload=? WHERE origin=?', (json.dumps(prediction), origin))
++            cutoff = row['minute'] - RETENTION
++            db.execute('DELETE FROM minutes WHERE minute < ?', (cutoff,))
++            db.execute('DELETE FROM forecasts WHERE origin < ?', (cutoff,))
++
++    def save_forecast(self, prediction):
++        with self.connect() as db:
++            db.execute('INSERT OR IGNORE INTO forecasts VALUES (?, ?, ?)',
++                       (prediction['origin'], prediction['version'], json.dumps(prediction)))
++
++    def save_report(self, report):
++        with self.connect() as db:
++            db.execute('INSERT OR REPLACE INTO reports VALUES (?, ?)', (report['created_at'], json.dumps(report)))
++            db.execute('DELETE FROM reports WHERE created NOT IN (SELECT created FROM reports ORDER BY created DESC LIMIT 20)')
+--- before/backend/forecast_worker.py
++++ after/backend/forecast_worker.py
+@@ -0,0 +1,97 @@
++"""CPU-bound sklearn work. Imported in a single separate, thread-limited process."""
++import os
++import pickle
++import platform
++import time
++from backend.forecast_data import FEATURES, MIN_EXAMPLES, fingerprint
++
++_models = None
++_version = None
++
++
++def initialize():
++    for name in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS', 'NUMEXPR_NUM_THREADS'):
++        os.environ[name] = '1'
++
++
++def metrics(actual, predicted):
++    n = len(actual)
++    return dict(mae=sum(abs(a-b) for a, b in zip(actual, predicted))/n,
++                rmse=(sum((a-b)**2 for a, b in zip(actual, predicted))/n)**.5)
++
++
++def split(samples):
++    boundary = int(len(samples) * .7)
++    test = samples[boundary:]
++    # Training labels end at least one minute before the first holdout origin.
++    train = [s for s in samples[:boundary] if s['origin'] + 60 <= test[0]['origin'] - 60]
++    return train, test
++
++
++def train(samples):
++    global _models, _version
++    if len(samples) < MIN_EXAMPLES:
++        raise ValueError(f'At least {MIN_EXAMPLES} eligible examples required')
++    import sklearn
++    import numpy as np
++    from sklearn.ensemble import RandomForestRegressor, HistGradientBoostingRegressor
++    from threadpoolctl import threadpool_limits
++    train_rows, test = split(samples)
++    x = np.asarray([s['x'] for s in train_rows], dtype=float)
++    y = np.asarray([s['y'] for s in train_rows], dtype=float)
++    xt = np.asarray([s['x'] for s in test], dtype=float)
++    yt = [s['y'] for s in test]
++    params = {
++        'random_forest': dict(n_estimators=80, max_depth=8, min_samples_leaf=3, n_jobs=1, random_state=42),
++        'hist_gradient_boosting': dict(max_iter=100, max_leaf_nodes=15, learning_rate=.06,
++                                       min_samples_leaf=10, l2_regularization=.1, early_stopping=False, random_state=42)}
++    candidates = {'random_forest': RandomForestRegressor(**params['random_forest']),
++                  'hist_gradient_boosting': HistGradientBoostingRegressor(**params['hist_gradient_boosting'])}
++    scores = {'baseline': dict(**metrics(yt, [s['x'][0] for s in test]), train_seconds=0,
++                               inference_ms_per_row=0, model_bytes=0)}
++    with threadpool_limits(limits=1):
++        for key, model in candidates.items():
++            start = time.perf_counter()
++            model.fit(x, y)
++            elapsed = time.perf_counter()-start
++            start = time.perf_counter()
++            predictions = np.maximum(0, model.predict(xt))
++            inference = (time.perf_counter()-start)*1000/len(test)
++            scores[key] = dict(**metrics(yt, predictions), train_seconds=elapsed,
++                               inference_ms_per_row=inference, model_bytes=len(pickle.dumps(model)))
++        # Evaluation models are discarded. Refit both on the identical full available
++        # past dataset for prospective predictions; holdout scores stay untouched.
++        all_x, all_y = [s['x'] for s in samples], [s['y'] for s in samples]
++        for model in candidates.values():
++            model.fit(all_x, all_y)
++    _models = candidates
++    _version = fingerprint(samples)[:16]
++    best = min(scores, key=lambda k: scores[k]['mae'])
++    if best == 'baseline':
++        insight = 'Repeating the previous minute performs at least as well as both models on holdout MAE.'
++    else:
++        gain = scores['baseline']['mae'] - scores[best]['mae']
++        relative = f" ({gain/scores['baseline']['mae']*100:.1f}%)" if scores['baseline']['mae'] else ''
++        insight = (f'{best.replace("_", " ")} has the lowest holdout MAE, '
++                   f'{gain:,.1f} UPDATEs{relative} lower than the baseline.')
++    return dict(created_at=int(time.time()), version=_version, dataset_sha256=fingerprint(samples),
++                target='RIPE RIS Live observed UPDATE count in the next aligned minute', horizon_seconds=60,
++                scope='Global observed stream; dashboard filters do not apply', feature_names=FEATURES,
++                samples=len(samples), train_samples=len(train_rows), test_samples=len(test),
++                train_start=train_rows[0]['origin'], train_end=train_rows[-1]['origin']+60,
++                test_start=test[0]['origin'], test_end=test[-1]['origin']+60,
++                embargo_seconds=60, split='Chronological 70/30; no shuffling or hyperparameter search',
++                live_fit_samples=len(samples), live_fit_label_end=samples[-1]['origin']+60,
++                versions=dict(python=platform.python_version(), sklearn=sklearn.__version__, numpy=np.__version__),
++                parameters=params, scores=scores, best_mae=best,
++                insight=insight+' This is an observed-stream forecast, not an outage or attack detector.')
++
++
++def predict(x, origin):
++    from threadpoolctl import threadpool_limits
++    if _models is None:
++        raise RuntimeError('Models have not been trained')
++    with threadpool_limits(limits=1):
++        values = {key: max(0., float(model.predict([x])[0])) for key, model in _models.items()}
++    return dict(origin=origin, target_end=origin+60, generated_at=time.time(), version=_version,
++                predictions=dict(values, baseline=x[0]), actual=None, outcome='pending')
+--- before/backend/forecast_service.py
++++ after/backend/forecast_service.py
+@@ -0,0 +1,158 @@
++"""Non-blocking orchestration: bounded minute storage and one model worker."""
++import asyncio
++import logging
++import multiprocessing
++import time
++from concurrent.futures import ProcessPoolExecutor
++from pathlib import Path
++from backend.forecast_data import HistoryStore, MinuteSampler, MIN_EXAMPLES, examples, features
++from backend import forecast_worker
++
++log = logging.getLogger('internet-pulse.forecast')
++
++
++class ForecastService:
++    def __init__(self, pulse, path=None):
++        self.pulse = pulse
++        self.store = HistoryStore(path or Path(__file__).resolve().parents[1]/'data'/'forecast.sqlite3')
++        self.sampler = MinuteSampler()
++        self.rows, self.report, self.predictions = [], None, []
++        self.pool = None
++        self.job = None
++        self.prediction_job = None
++        self.samples = []
++        self.ready = False
++        self.error = None
++        self.retry_at = 0
++        self.last_attempt = None
++        self.last_fit_origin = None
++        self.state = {}
++        self.publish()
++
++    def publish(self):
++        count = len(self.samples)
++        scores = self.report['scores'] if self.report else None
++        matched = [p for p in self.predictions if self.report and p['version'] == self.report['version']
++                   and p['outcome'] == 'observed'][:60]
++        prospective = None
++        if matched:
++            prospective = {key: forecast_worker.metrics([p['actual'] for p in matched],
++                            [p['predictions'][key] for p in matched]) for key in scores}
++        self.state = dict(status='unavailable' if self.error else 'training' if self.job and not self.job.done()
++                          else 'ready' if self.ready else 'collecting', error=self.error,
++                          scope='Global observed stream; dashboard filters do not apply',
++                          eligible_examples=count, minimum_examples=MIN_EXAMPLES,
++                          valid_minutes=sum(bool(r['valid']) for r in self.rows),
++                          excluded_minutes=sum(not r['valid'] for r in self.rows),
++                          report=self.report, forecasts=self.predictions[:6],
++                          prospective=dict(samples=len(matched), scores=prospective),
++                          updated_at=time.time())
++
++    async def reload(self):
++        self.rows, self.report, self.predictions = await asyncio.to_thread(self.store.read)
++        self.samples = await asyncio.to_thread(examples, self.rows)
++
++    async def forecast(self, x, origin):
++        try:
++            p = await asyncio.get_running_loop().run_in_executor(self.executor(), forecast_worker.predict, x, origin)
++            if p['generated_at'] < origin+5:
++                await asyncio.to_thread(self.store.save_forecast, p)
++                await self.reload()
++                self.publish()
++        except asyncio.CancelledError:
++            raise
++        except Exception:
++            log.exception('Forecast inference failed; live ingestion continues')
++            self.ready = False
++            self.error = 'Model inference unavailable; retrying in five minutes. See backend log.'
++            self.retry_at = time.time()+300
++            if self.pool:
++                self.pool.shutdown(wait=False, cancel_futures=True)
++                self.pool = None
++            self.publish()
++
++    def executor(self):
++        if self.pool is None:
++            self.pool = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context('spawn'),
++                                            initializer=forecast_worker.initialize)
++        return self.pool
++
++    async def fit(self, samples):
++        try:
++            result = await asyncio.get_running_loop().run_in_executor(self.executor(), forecast_worker.train, samples)
++            await asyncio.to_thread(self.store.save_report, result)
++            self.report = result
++            self.last_fit_origin = samples[-1]['origin']
++            self.ready, self.error = True, None
++        except asyncio.CancelledError:
++            raise
++        except Exception:
++            log.exception('Forecast training failed; live ingestion continues')
++            self.error = 'Model training unavailable; retrying in five minutes. See backend log.'
++            self.retry_at = time.time()+300
++            self.ready = False
++            if self.pool:
++                self.pool.shutdown(wait=False, cancel_futures=True)
++                self.pool = None
++        finally:
++            self.publish()
++
++    async def run(self):
++        try:
++            while True:
++                try:
++                    await self.reload()
++                    self.error = None
++                    break
++                except Exception:
++                    log.exception('Forecast storage could not initialize; retrying')
++                    self.error = 'Forecast storage unavailable. Retrying; live routing continues.'
++                    self.publish()
++                    await asyncio.sleep(5)
++            while True:
++                try:
++                    now = time.time()
++                    row = self.sampler.sample(now, self.pulse.connected, self.pulse.buckets)
++                    if row:
++                        await asyncio.to_thread(self.store.save_minute, row)
++                        await self.reload()
++                        if self.error and self.error.startswith('Forecast history'):
++                            self.error = None
++                    samples = self.samples
++                    if (len(samples) >= MIN_EXAMPLES and now >= self.retry_at and
++                        (self.job is None or self.job.done()) and
++                        (not self.ready or samples[-1]['origin']-self.last_fit_origin >= 3600)):
++                        self.job = asyncio.create_task(self.fit(samples))
++                    origin = int(now)//60*60
++                    # Skip late forecasts: never backfill predictions after seeing the target.
++                    if (self.ready and (self.job is None or self.job.done()) and
++                        (self.prediction_job is None or self.prediction_job.done()) and
++                        now-origin < 5 and origin != self.last_attempt):
++                        self.last_attempt = origin
++                        x = features(self.rows[-5:], origin)
++                        if x is not None and self.report['live_fit_label_end'] <= origin:
++                            self.prediction_job = asyncio.create_task(self.forecast(x, origin))
++                    self.publish()
++                except asyncio.CancelledError:
++                    raise
++                except Exception:
++                    log.exception('Forecast collection unavailable; live ingestion continues')
++                    self.error = 'Forecast history temporarily unavailable. See backend log.'
++                    self.publish()
++                    await asyncio.sleep(5)
++                await asyncio.sleep(.5)
++        except asyncio.CancelledError:
++            raise
++        except Exception:
++            log.exception('Forecast storage could not initialize')
++            self.error = 'Forecast storage unavailable. Live routing continues.'
++            self.publish()
++        finally:
++            if self.prediction_job:
++                self.prediction_job.cancel()
++                await asyncio.gather(self.prediction_job, return_exceptions=True)
++            if self.job:
++                self.job.cancel()
++                await asyncio.gather(self.job, return_exceptions=True)
++            if self.pool:
++                self.pool.shutdown(wait=False, cancel_futures=True)
+--- before/backend/forecast_cli.py
++++ after/backend/forecast_cli.py
+@@ -0,0 +1,35 @@
++"""Reproduce the chronological comparison from captured genuine aggregates."""
++import argparse
++import csv
++import json
++from pathlib import Path
++from backend.forecast_data import HistoryStore, examples, MIN_EXAMPLES
++from backend import forecast_worker
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__)
++    parser.add_argument('action', choices=['evaluate', 'export'])
++    parser.add_argument('--db', type=Path, default=Path(__file__).resolve().parents[1]/'data'/'forecast.sqlite3')
++    parser.add_argument('--output', type=Path, required=True)
++    args = parser.parse_args()
++    rows, _, _ = HistoryStore(args.db).read()
++    if args.action == 'export':
++        if not rows:
++            parser.exit(2, 'No captured history yet. Start the backend first.\n')
++        with args.output.open('w', newline='', encoding='utf-8') as handle:
++            writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
++            writer.writeheader()
++            writer.writerows(rows)
++    else:
++        samples = examples(rows)
++        if len(samples) < MIN_EXAMPLES:
++            parser.exit(2, f'Collecting genuine history: {len(samples)}/{MIN_EXAMPLES} eligible examples.\n')
++        forecast_worker.initialize()
++        result = forecast_worker.train(samples)
++        args.output.write_text(json.dumps(result, indent=2), encoding='utf-8')
++        print(f'Compared both models and baseline on {result["test_samples"]} chronological holdout windows.')
++
++
++if __name__ == '__main__':
++    main()
+--- before/backend/test_forecast.py
++++ after/backend/test_forecast.py
+@@ -0,0 +1,209 @@
++"""Isolated fixtures verify mechanics; no fixture data reaches live storage or UI."""
++import asyncio
++import json
++import tempfile
++import unittest
++from collections import Counter, deque
++from concurrent.futures import ProcessPoolExecutor
++from multiprocessing import get_context
++from pathlib import Path
++from types import SimpleNamespace
++from backend.forecast_data import FEATURES, MIN_EXAMPLES, HistoryStore, MinuteSampler, examples, features
++from backend.forecast_service import ForecastService
++from backend import forecast_worker
++
++
++def fixture_rows(count=200):
++    return [dict(minute=i*60, updates=100+i%17*3, announcements=90, withdrawals=i%7,
++                 path_sum=400, path_count=100, flaps=1, collectors=3, valid=True, reason='') for i in range(count)]
++
++
++class FeatureTests(unittest.TestCase):
++    def test_only_past_features_and_future_target(self):
++        rows = fixture_rows(8)
++        x = features(rows, 300)
++        self.assertEqual(len(x), len(FEATURES))
++        self.assertEqual(x[:5], [112, 109, 106, 103, 100])
++        rows[5]['updates'] = 99999
++        self.assertEqual(features(rows, 300), x)
++        sample = examples(rows)[0]
++        self.assertEqual(sample['origin'], 300)
++        self.assertEqual(sample['y'], 99999)
++        self.assertEqual(sample['x'], x)
++
++    def test_missing_and_invalid_minutes_exclude_examples(self):
++        rows = fixture_rows(12)
++        rows[5]['valid'] = False
++        self.assertEqual([s['origin'] for s in examples(rows)], [660])
++        del rows[5]
++        self.assertEqual([s['origin'] for s in examples(rows)], [660])
++
++    def test_split_has_embargo_and_shared_test_targets(self):
++        samples = examples(fixture_rows())
++        train, test = forecast_worker.split(samples)
++        self.assertLessEqual(train[-1]['origin']+60, test[0]['origin']-60)
++        self.assertTrue(all(s['origin'] < test[0]['origin'] for s in train))
++        self.assertEqual(len(test), len(samples)-int(len(samples)*.7))
++
++    def test_metrics(self):
++        result = forecast_worker.metrics([0, 10], [2, 6])
++        self.assertEqual(result['mae'], 3)
++        self.assertAlmostEqual(result['rmse'], 10**.5)
++
++
++class SamplerTests(unittest.TestCase):
++    def test_connected_quiet_complete_minute_is_valid_zero(self):
++        sampler = MinuteSampler()
++        sampler.sample(60, True, [])
++        for second in range(61, 121):
++            row = sampler.sample(second, True, [])
++        self.assertTrue(row['valid'])
++        self.assertEqual(row['updates'], 0)
++        self.assertEqual(row['minute'], 60)
++
++    def test_partial_startup_outage_and_sampler_gap(self):
++        for bad in ('startup', 'disconnect', 'gap'):
++            sampler = MinuteSampler()
++            start = 80 if bad == 'startup' else 60
++            for second in range(start, 121):
++                if bad == 'gap' and second == 90:
++                    continue
++                row = sampler.sample(second, not (bad == 'disconnect' and second == 90), [])
++            self.assertFalse(row['valid'], bad)
++
++    def test_bucket_scalars_and_collectors_are_copied_once(self):
++        sampler = MinuteSampler()
++        buckets = deque([dict(second=60, updates=7, announcements=10, withdrawals=2,
++                              path_sum=28, path_count=7, flaps=1, collectors=Counter({'rrc00':7}))])
++        sampler.sample(60, True, buckets)
++        sampler.sample(61, True, buckets)
++        sampler.sample(61.5, True, buckets)
++        for second in range(62, 121):
++            row = sampler.sample(second, True, buckets)
++        self.assertTrue(row['valid'])
++        self.assertEqual((row['updates'], row['collectors'], row['announcements']), (7, 1, 10))
++
++
++class StoreTests(unittest.TestCase):
++    def test_maturation_zero_actual_invalid_target_and_retention(self):
++        with tempfile.TemporaryDirectory() as folder:
++            store = HistoryStore(Path(folder)/'test.sqlite3')
++            prediction = dict(origin=60, version='test', actual=None, outcome='pending', predictions={'baseline':1})
++            store.save_forecast(prediction)
++            self.assertIsNone(store.read()[2][0]['actual'])
++            row = fixture_rows(2)[1]
++            row['updates'] = 0
++            store.save_minute(row)
++            self.assertEqual(store.read()[2][0]['actual'], 0)
++            prediction.update(origin=120)
++            store.save_forecast(prediction)
++            row.update(minute=120, valid=False)
++            store.save_minute(row)
++            self.assertTrue(store.read()[2][0]['outcome'].startswith('excluded'))
++            row.update(minute=15*86400)
++            store.save_minute(row)
++            self.assertEqual(len(store.read()[0]), 1)
++            self.assertEqual(store.read()[2], [])
++
++    def test_clock_rollback_does_not_replace_history(self):
++        with tempfile.TemporaryDirectory() as folder:
++            store = HistoryStore(Path(folder)/'test.sqlite3')
++            row = fixture_rows(1)[0]
++            store.save_minute(row)
++            row['updates'] = 9999
++            store.save_minute(row)
++            self.assertEqual(store.read()[0][0]['updates'], 100)
++
++    def test_cold_start_has_no_report_or_scores(self):
++        service = ForecastService(SimpleNamespace(connected=False, buckets=[]), ':unused:')
++        self.assertEqual(service.state['status'], 'collecting')
++        self.assertIsNone(service.state['report'])
++        self.assertEqual(service.state['eligible_examples'], 0)
++
++
++class WorkerTests(unittest.TestCase):
++    def test_both_models_in_spawned_worker_and_real_prediction_maturation(self):
++        # Explicit isolated test fixture, never the production HistoryStore.
++        rows = fixture_rows(200)
++        samples = examples(rows)
++        self.assertGreaterEqual(len(samples), MIN_EXAMPLES)
++        with ProcessPoolExecutor(max_workers=1, mp_context=get_context('spawn'), initializer=forecast_worker.initialize) as executor:
++            report = executor.submit(forecast_worker.train, samples).result(timeout=60)
++            prediction = executor.submit(forecast_worker.predict, features(rows, 12000), 12000).result(timeout=15)
++        self.assertEqual(set(report['scores']), {'baseline', 'random_forest', 'hist_gradient_boosting'})
++        self.assertEqual(report['scores']['baseline']['mae'],
++                         forecast_worker.metrics([s['y'] for s in forecast_worker.split(samples)[1]],
++                                                 [s['x'][0] for s in forecast_worker.split(samples)[1]])['mae'])
++        self.assertEqual(prediction['version'], report['version'])
++        self.assertEqual(prediction['origin'], report['live_fit_label_end'])
++        self.assertIsNone(prediction['actual'])
++        self.assertTrue(all(v >= 0 for v in prediction['predictions'].values()))
++        self.assertFalse(report['parameters']['hist_gradient_boosting']['early_stopping'])
++        self.assertEqual(report['versions']['sklearn'], '1.7.2')
++        json.dumps(report, allow_nan=False)
++        with tempfile.TemporaryDirectory() as folder:
++            store = HistoryStore(Path(folder)/'test.sqlite3')
++            store.save_report(report)
++            store.save_forecast(prediction)
++            row = fixture_rows(201)[-1]
++            store.save_minute(row)
++            self.assertEqual(store.read()[2][0]['actual'], row['updates'])
++
++
++class ServiceTests(unittest.IsolatedAsyncioTestCase):
++    async def test_service_trains_and_persists_comparison_in_isolation(self):
++        with tempfile.TemporaryDirectory() as folder:
++            service = ForecastService(SimpleNamespace(connected=True, buckets=[]), Path(folder)/'test.sqlite3')
++            try:
++                await service.fit(examples(fixture_rows(200)))
++                self.assertTrue(service.ready, service.error)
++                self.assertEqual(service.state['status'], 'ready')
++                _, persisted, _ = await asyncio.to_thread(service.store.read)
++                self.assertEqual(persisted['version'], service.report['version'])
++                self.assertEqual(len(persisted['scores']), 3)
++                self.assertEqual(service.pulse.buckets, [])
++            finally:
++                if service.pool:
++                    await asyncio.to_thread(service.pool.shutdown, wait=True, cancel_futures=True)
++
++    async def test_collection_continues_while_training_waits(self):
++        with tempfile.TemporaryDirectory() as folder:
++            pulse = SimpleNamespace(connected=True, buckets=[])
++            service = ForecastService(pulse, Path(folder)/'test.sqlite3')
++            def seed():
++                for row in fixture_rows(190):
++                    service.store.save_minute(row)
++            await asyncio.to_thread(seed)
++            training_started = asyncio.Event()
++            training_release = asyncio.Event()
++
++            async def delayed_fit(samples):
++                training_started.set()
++                await training_release.wait()
++
++            service.fit = delayed_fit
++            emitted = dict(fixture_rows(191)[-1])
++            calls = 0
++
++            def sample(*args):
++                nonlocal calls
++                calls += 1
++                return emitted if calls == 2 else None
++
++            service.sampler.sample = sample
++            task = asyncio.create_task(service.run())
++            try:
++                await asyncio.wait_for(training_started.wait(), timeout=5)
++                for _ in range(30):
++                    if any(r['minute'] == emitted['minute'] for r in service.rows):
++                        break
++                    await asyncio.sleep(.1)
++                self.assertTrue(any(r['minute'] == emitted['minute'] for r in service.rows))
++                self.assertFalse(service.job.done())
++            finally:
++                task.cancel()
++                await asyncio.gather(task, return_exceptions=True)
++
++
++if __name__ == '__main__':
++    unittest.main()
+--- before/frontend/src/App.tsx
++++ after/frontend/src/App.tsx
+@@ -2,6 +2,8 @@
+ import {animate,motion,useReducedMotion} from 'framer-motion';
+ import {Activity,ArrowDownRight,ArrowUpRight,Radio,Network,SlidersHorizontal,RotateCcw,Pause,Play,Search,TriangleAlert,ChevronRight,ExternalLink} from 'lucide-react';
+ import Dynamics from './Dynamics';
++import ForecastComparison from './ForecastComparison';
++import './forecast.css';
+ import DashboardTour from './DashboardTour';
+ import Topology from './Topology';
+ import Heartbeat from './Heartbeat';
+@@ -42,6 +44,7 @@
+    <div className="hero-row"><Topology source={data?.topology} timestamp={data?.timestamp??0} window={filters.window} onWindow={updateWindow} scope={scope}/><div className="hero-sidebar"><ActivityIndex data={data}/><Ranking data={data}/></div></div>
+    <div className="signals-row"><Heartbeat key={scope} data={data}/><Dynamics rows={data?.heartbeat}/></div>
+    <Heatmap data={data}/>
++   <ForecastComparison/>
+    <div className="feeds-row"><EventWaterfall key={scope} data={data}/><section className="panel anomaly-panel"><Heading title="Routing observations" subtitle="Explainable heuristics · not attack attribution" badge={`${data?.anomalies.length??0} SIGNALS`}/><div className="anomaly-feed"><>{data?.anomalies.slice(0,20).map(a=><motion.article key={a.id} layout initial={{opacity:0,y:-8}} animate={{opacity:1,y:0}} exit={{opacity:0}} transition={{duration:.25}} className={`anomaly ${a.severity.toLowerCase()}`}><div className="anomaly-meta"><span><TriangleAlert size={11}/>{a.type}</span><span className="severity">{a.severity}</span></div><p>{a.explanation}</p><div className="anomaly-context mono"><time>{milliseconds(a.timestamp)}</time><span>{a.prefix??(a.asn?`AS${a.asn}`:'All observed routes')}</span></div></motion.article>)}</>{!data?.anomalies.length&&<div className="empty"><TriangleAlert size={20}/><b>No signals in this window</b><span>Monitoring update bursts, flaps, path length and origin changes. Quiet is a valid observation.</span></div>}</div></section></div>
+    <footer><span><Radio size={11}/> Actual RIPE RIS observations · receipt-time aggregation</span><span>Bounded memory · 1 Hz snapshots · no synthetic traffic</span></footer>
+   </main></div>
+--- before/frontend/src/ForecastComparison.tsx
++++ after/frontend/src/ForecastComparison.tsx
+@@ -0,0 +1,32 @@
++import {memo,useEffect,useState} from 'react';
++
++type Score={mae:number;rmse:number;train_seconds:number;inference_ms_per_row:number;model_bytes:number};
++type ModelKey='random_forest'|'hist_gradient_boosting'|'baseline';
++type Report={version:string;samples:number;train_samples:number;test_samples:number;train_start:number;train_end:number;test_start:number;test_end:number;created_at:number;scores:Record<ModelKey,Score>;insight:string};
++type Forecast={origin:number;target_end:number;generated_at:number;version:string;predictions:Record<ModelKey,number>;actual:number|null;outcome:string};
++type State={status:string;error:string|null;eligible_examples:number;minimum_examples:number;valid_minutes:number;excluded_minutes:number;report:Report|null;forecasts:Forecast[];prospective:{samples:number;scores:Record<ModelKey,Score>|null}};
++const names:Record<ModelKey,string>={random_forest:'Random Forest',hist_gradient_boosting:'Histogram Gradient Boosting',baseline:'Repeat previous minute'};
++const keys=Object.keys(names) as ModelKey[];
++const num=new Intl.NumberFormat(undefined,{maximumFractionDigits:0});
++const date=(v:number)=>new Date(v*1000).toLocaleString();
++
++export default memo(function ForecastComparison(){
++ const [data,setData]=useState<State|null>(null),[error,setError]=useState('');
++ useEffect(()=>{let active=true;let timer:ReturnType<typeof setTimeout>;let controller:AbortController;
++  const poll=async()=>{controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),4000);try{const response=await fetch('/api/forecast',{signal:controller.signal});if(!response.ok)throw Error('Forecast service unavailable');const result=await response.json() as State;if(active){setData(result);setError('')}}catch{if(active)setError('Forecast service temporarily unavailable. Routing observations continue.')}finally{clearTimeout(timeout);if(active)timer=setTimeout(poll,5000)}};
++  void poll();return()=>{active=false;controller?.abort();clearTimeout(timer)};
++ },[]);
++ const report=data?.report,latest=data?.forecasts[0];
++ return <section className="panel forecast-panel" id="forecast-insights" aria-label="Routing forecast model comparison">
++  <div className="section-heading"><div><h2>Routing forecast comparison</h2><p>Two models, one target: observed UPDATE count in the next aligned minute</p></div><span className="badge">GLOBAL · {data?.status.toUpperCase()??'LOADING'}</span></div>
++  <p className="forecast-note">Random Forest and Histogram Gradient Boosting use the same inputs and target, compared with a repeat-previous-minute baseline. Uses all observed RIS traffic; dashboard filters do not apply. Forecasts describe this collector stream, not the entire Internet.</p>
++  {(error||data?.error)&&<div className="notice" role="status">{error||data?.error}</div>}
++  {!report&&<div className="forecast-warmup"><strong>{data?`${data.eligible_examples} / ${data.minimum_examples} eligible training windows`:'Connecting to forecast history…'}</strong><p>{data?.status==='training'?'Training both models in a separate worker…':'Collecting genuine history before reporting model performance. A fresh start needs about 3 hours 6 minutes of continuous valid observations.'}</p>{data&&<><progress aria-label="Training history collected" max={data.minimum_examples} value={Math.min(data.eligible_examples,data.minimum_examples)}/><p>{data.valid_minutes} complete minutes · {data.excluded_minutes} incomplete minutes excluded. Upstream outages and startup partial minutes are excluded; connected quiet minutes can be zero.</p></>}</div>}
++  {report&&<><div className="forecast-summary"><strong>{report.insight}</strong><p>{report.train_samples} training windows · {report.test_samples} later holdout windows · one-minute embargo · fixed settings · no shuffled split.</p><p>Holdout: {date(report.test_start)} – {date(report.test_end)} (local). Errors are UPDATE counts per 60-second window; lower is better. Latency is measured batch inference time per row.</p>{data?.status==='training'&&<p>Refreshing models; showing the last completed evaluation.</p>}</div>
++   <div className="forecast-table-scroll"><table className="forecast-table"><thead><tr><th>Model</th><th>Holdout MAE</th><th>Holdout RMSE</th><th>Train time</th><th>Inference / row</th><th>Model size</th></tr></thead><tbody>{keys.map(key=>{const score=report.scores[key];return <tr key={key}><th scope="row">{names[key]}</th><td>{num.format(score.mae)}</td><td>{num.format(score.rmse)}</td><td>{key==='baseline'?'—':`${score.train_seconds.toFixed(2)} s`}</td><td>{key==='baseline'?'—':`${score.inference_ms_per_row.toFixed(3)} ms`}</td><td>{key==='baseline'?'—':`${(score.model_bytes/1024).toFixed(1)} KiB`}</td></tr>})}</tbody></table></div>
++   <p className="forecast-note">Evaluation recorded {date(report.created_at)}. Live models are then refit on all {report.samples} available past windows. A single holdout cannot establish reliability across routing regimes. <a href="/api/forecast/report" target="_blank" rel="noreferrer">Open reproducible evaluation JSON</a></p>
++  </>}
++  {latest&&<div className="forecast-live"><strong>{latest.target_end>Date.now()/1000?'Current forecast':'Most recent forecast'} · {date(latest.origin)} – {new Date(latest.target_end*1000).toLocaleTimeString()}</strong><p>Generated {date(latest.generated_at)} · forecast version {latest.version}. {latest.outcome==='pending'?'Actual count pending target completion.':latest.outcome==='observed'?`Observed: ${num.format(latest.actual!)} UPDATEs.`:'Target minute excluded because capture was incomplete.'}</p><div className="forecast-values">{keys.map(key=><span key={key}><small>{names[key]}</small><b>{num.format(latest.predictions[key])}</b><small>UPDATEs / minute</small></span>)}</div>{Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting)>0&&<p>Model disagreement: {num.format(Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting))} UPDATEs. This is not a confidence interval.</p>}</div>}
++  {data?.prospective.scores&&<p className="forecast-note">Prospective MAE over {data.prospective.samples} completed forecasts from the current model version: {keys.map(key=>`${names[key]} ${num.format(data.prospective.scores![key].mae)}`).join(' · ')}. These forecasts were stored before their target minutes completed.</p>}
++ </section>
++});
+--- before/frontend/src/forecast.css
++++ after/frontend/src/forecast.css
+@@ -0,0 +1,16 @@
++
++.forecast-panel{margin-bottom:20px;min-width:0}
++.forecast-note,.forecast-summary p,.forecast-warmup p,.forecast-live p{color:var(--muted,#82939e);font-size:12px;line-height:1.65;margin:8px 0;overflow-wrap:anywhere}
++.forecast-note a{color:#67dcc6;text-decoration:underline}
++.forecast-warmup,.forecast-summary,.forecast-live{padding:14px 18px;border-top:1px solid #1e3039}
++.forecast-panel>.forecast-note{padding:0 18px}
++.forecast-warmup strong,.forecast-summary strong,.forecast-live strong{font-size:13px;font-weight:500;color:#d9e9e8}
++.forecast-warmup progress{display:block;width:min(100%,420px);height:6px;accent-color:#5ee0b8;margin:15px 0}
++.forecast-table-scroll{overflow-x:auto;padding:0 18px}
++.forecast-table{width:100%;border-collapse:collapse;font-size:12px;text-align:left;white-space:nowrap}
++.forecast-table th,.forecast-table td{padding:11px 12px;border-bottom:1px solid #1e3039}
++.forecast-table th{font-weight:500;color:#a6b8c1}.forecast-table td{font-variant-numeric:tabular-nums;color:#d9e9e8}
++.forecast-table thead th{font-size:10px;text-transform:uppercase;letter-spacing:.06em}
++.forecast-values{display:flex;gap:28px;flex-wrap:wrap;margin:14px 0}
++.forecast-values span{display:grid;gap:5px}.forecast-values small{color:#82939e;font-size:11px}.forecast-values b{font-size:21px;font-weight:500;color:#5ee0b8;font-variant-numeric:tabular-nums}
++@media(max-width:600px){.forecast-panel .section-heading{gap:10px;flex-wrap:wrap}.forecast-table th,.forecast-table td{padding:10px 8px}.forecast-values{gap:18px}}
+--- before/.gitignore
++++ after/.gitignore
+@@ -6,3 +6,4 @@
+ *.log
+ *.tsbuildinfo
+ .env
++data/
+--- before/README.md
++++ after/README.md
+@@ -1,6 +1,6 @@
+ # Internet Pulse
+ 
+-A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, database, Redis, Kafka, or ML.
++A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, Redis, or Kafka. A separate forecasting layer records bounded minute aggregates in local SQLite and compares two regression models without changing BGP ingestion.
+ 
+ ## Setup
+ 
+@@ -132,3 +132,33 @@
+ Add prefix drill-down, reliable AS organization enrichment and configurable anomaly thresholds, then benchmark higher client counts. Before public deployment, add authentication, TLS and deployment limits. No organization names are inferred or invented. Historical storage, exhaustive route state and validated incident attribution remain outside this in-memory version.
+ 
+ Protocol reference: [RIPE RIS Live manual](https://ris-live.ripe.net/manual/).
++
++## Routing forecasting comparison
++
++The research question is: **Can two regression models predict next-minute observed BGP UPDATE volume better than repeating the previous minute?** This is forecasting collector observations, not detecting attacks, predicting global outages, or claiming Internet-wide visibility.
++
++The backend automatically captures genuine, global, receipt-time minute aggregates in `data/forecast.sqlite3` (SQLite WAL). No prefixes or raw events are persisted by this feature. It retains 14 days, reads at most 4,326 recent rows for modelling, and retains the latest 20 evaluation reports. Startup partial minutes, observed upstream disconnections, missed sampling intervals, and missing minutes are excluded. A connected quiet minute is a valid zero. Five contiguous valid past minutes form each input and the following complete minute supplies its label. Dashboard scope filters do not affect this global training stream.
++
++Both **RandomForestRegressor** and **HistGradientBoostingRegressor**, from scikit-learn 1.7.2, solve the identical regression problem. Inputs are five lagged minute UPDATE counts, their mean/std/min/max and latest change, latest withdrawal share, average AS path length, flap count, collector count, announcements and withdrawals. These are derived from existing aggregate fields; routing/event semantics are unchanged. Each report records exact feature names, fixed parameters, dependency versions, dataset SHA-256, sample counts, time ranges, and model version.
++
++At least **180 labelled examples** are required: approximately **3 hours 6 minutes** of uninterrupted genuine observations from a fresh start, depending on alignment and connection health. This is a practical collection threshold, not proof of statistical adequacy. The dashboard shows progress while collecting. It never displays fixture-trained scores. History survives backend restarts; gaps still invalidate the affected five-minute contexts.
++
++Evaluation uses the first 70% of examples for training and the later 30% for holdout, with a one-minute embargo between the final training label end and first holdout origin. The two models and repeat-previous-minute baseline use identical examples. There is no shuffling, hyperparameter search, random early-stopping split, or claim that model disagreement is a confidence interval. Metrics are **MAE and RMSE in UPDATE counts per 60-second window**, evaluation fit time, measured batch prediction milliseconds per row, and serialized model size. Baseline timing/size is not benchmarked. The report identifies lowest holdout MAE even when the baseline wins. Model-size measurement uses serialization only; no model files are loaded or deserialized.
++
++After evaluation, both live models are refit on all currently available past labelled examples. Initial training and hourly refresh run in one separate process with one computational thread; SQLite operations run outside the event loop. Minute sampling is independent of model jobs, and ingestion contains no model or database calls. API responses are cached in memory and fetched by an independent five-second frontend poll, not attached to every WebSocket snapshot. There is at most one training job and one prospective prediction job. A missed deadline skips that forecast; it never backfills a prediction using later observations.
++
++Prospective predictions are generated within the first five seconds of aligned minute `[t, t+60)`, using aggregates ending at `t`; actual generation time is recorded. Thus remaining lead time is approximately 55–60 seconds, not always a full 60 seconds from UI display. Predictions are stored before target completion and matched to actuals when a valid target minute matures. Incomplete targets are excluded. The UI reports prospective MAE for up to 60 matched predictions of the current model version (within its latest 120 captured forecasts), separately from the chronological holdout. Failed storage/training affects this feature only; live routing continues.
++
++Run from the repository root:
++
++```powershell
++.\.venv\Scripts\python.exe -m unittest discover -s backend -p "test_*.py" -v
++.\.venv\Scripts\python.exe -m backend.forecast_cli export --output captured-minutes.csv
++.\.venv\Scripts\python.exe -m backend.forecast_cli evaluate --output evaluation.json
++```
++
++CLI exports and comparisons use the same recent bounded capture window and feature implementation. An evaluation before enough history exists exits with a collection message and no scores. `/api/forecast` exposes collection state and comparisons; `/api/forecast/report` returns the latest report, or HTTP 409 during cold start. A retained report is identified as the last evaluation while models are warming up after restart. Keep a copy of the exported aggregates together with the report for exact experiment reproduction before retention removes them. Never import fixture data into the production capture database.
++
++Limitations: a single chronological holdout is not cross-validation or proof of generalization; neighboring windows have correlated inputs; several days and different routing conditions are preferable for a final academic comparison. Collector coverage and connection changes can affect counts. Availability is checked at sampling resolution (0.5 s), so an outage entirely between observations can escape detection. A stalled upstream that the backend still considers connected cannot be distinguished from genuine quiet activity by this layer. Forecast jobs may skip windows during refresh or worker recovery. This implementation introduces local SQLite and the scikit-learn backend dependency, but no new frontend dependency, simulated observations, or dashboard chart types.
++
++Method references: [scikit-learn time-series lagged-feature evaluation](https://scikit-learn.org/stable/auto_examples/applications/plot_time_series_lagged_features.html), [Random Forest regressor](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html), [Histogram Gradient Boosting regressor](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html).
+--- before/VERIFICATION.md
++++ after/VERIFICATION.md
+@@ -202,3 +202,53 @@
+ ### Limits and cleanup
+ 
+ Browser automation intermittently timed out, including one stalled quiet-scope attempt. Those attempts were not counted as passes; a fresh browser session subsequently completed the quiet-view and responsive checks. This does not identify the timeout cause as an application bug or establish uninterrupted browser-automation reliability. Stale/disconnected/reconnect failure branches were regression-tested in isolation rather than inducing an outage in the live backend. Physical touch hardware and an actual OS reduced-motion toggle were not tested; their handlers/preferences were implemented and reviewed. No new calibrated FPS/heap profile or 30-minute soak was performed on this revised frontend; the earlier sustained report remains historical evidence for the previous build. Metric calculations, ingestion and metadata resolution are unchanged. Temporary preview/browser viewport settings were cleaned up; the normal development dashboard remains on 127.0.0.1:5173.
++
++
++## Two-model forecasting integration — 2026-10-22
++
++Added Random Forest and Histogram Gradient Boosting regression for the same target: the next aligned minute's global observed BGP UPDATE count. Both use the same past-only features, chronological holdout, one-minute embargo, fixed settings and repeat-previous-minute baseline. The report includes MAE/RMSE, evaluation fit time, batch prediction latency per row, serialized model size, sample/time ranges, dependency versions and dataset hash. Evaluation is separate from the full-past refit used for prospective predictions. No production scores or claimed accuracy were fabricated.
++
++Minute aggregates are persisted in local SQLite with 14-day retention; training reads at most 4,326 recent minutes and retains 20 reports. Only complete connected minutes are eligible. Startup partials, observed outages, missing minutes and sampler gaps are excluded. Quiet connected intervals remain valid zeros. Model work uses one separate process; storage and feature preparation run outside the event loop. Ingestion, its routing semantics, existing metadata enrichment and the existing WebSocket protocol are unchanged. The added panel polls a cached independent endpoint every five seconds.
++
++| Check | Result |
++|---|---|
++| Full backend suite | PASS: 25 tests, final run 5.227 s. Includes all 12 existing tests plus 13 forecasting tests. |
++| Temporal correctness | PASS: five strictly past minutes, future target isolation, missing/invalid context rejection, chronological split and one-minute embargo; all models share holdout rows. |
++| Capture validity | PASS: genuine connected zero minutes; partial startup, outage and missed sample exclusion; scalar counts and collector union captured once. |
++| Persistence and bounds | PASS: actual zero preserved, incomplete target excluded, duplicate minute cannot overwrite history, old capture/forecasts removed after retention. Capture survived a real backend restart. |
++| Worker and orchestration | PASS: both actual sklearn estimators fit and predict in a spawned process; report saved/reloaded through service; minute capture continues while a separate training job waits. Isolated fixtures use temporary databases and never enter the running dashboard. |
++| Initial worker startup | First full run hit the 60 s test timeout during first worker startup. Cause not established. Isolated rerun passed in 1.863 s, full reruns passed, final 25-test suite passed. Not reported as a fixed application defect. |
++| TypeScript | PASS: `tsc -b`. |
++| Production build | PASS: JS 963.97 kB / 293.21 kB gzip; CSS 37.18 kB / 8.98 kB gzip. Existing >500 kB chunk advisory remains. No new frontend dependencies. |
++| Existing frontend connection checks | PASS: all 8 assertions/scenarios in `frontend/tests/connection-state.cjs`. |
++| Cold-start API | PASS: `/api/forecast` reports collecting with real counts and no report; `/api/forecast/report` returns HTTP 409; CLI evaluate exits with the collection message before 180 eligible examples; CSV export contains captured real minute aggregates. |
++| Live WebSocket, final backend | PASS: 75.50 s, 73 snapshots, 304,368 additional genuine UPDATEs, no observed disconnects/errors. Median gap 1.047 s; maximum 1.109 s. |
++| Forecast API under live ingestion | Median 22.16 ms; maximum 34.59 ms over 14 probes during the same read-only check. |
++| Backend memory | One post-restart sample: working set 103.00 MiB, private memory 86.44 MiB. This is a point measurement during collection, not a peak/soak or production-training memory measurement. |
++| Responsive cold-start panel | PASS: desktop 1280 px, tablet 768x1024, mobile 390x844 and 320x740. No horizontal page/panel overflow; long explanations wrap. Existing heatmap retains horizontal scrolling. The ready-state table has its own horizontal scroll container. |
++| Event feed regression | PASS on real observations: pause, counter grew to 40,117 new events while paused, search with no matches, clear search and resume back to STREAMING. |
++| Browser console | No captured errors or warnings at successful production-preview checkpoints. |
++
++At the final live-check checkpoint there were 7 valid captured minutes, 2 excluded partial minutes and 2/180 eligible examples. These counts continue advancing while the backend runs. No production model report existed yet. First evaluation requires approximately 3 h 6 min of valid continuous capture from a fresh start; stored history survives restarts, but gaps delay eligibility. Automatic training, hourly refresh, early-window forecast persistence, later actual matching, baseline comparison and derived insight text are implemented. There is no claim that either model already beats the baseline on genuine held-out production capture.
++
++### Files changed in this integration
++
++- `backend/main.py` — lifecycle tasks and cached forecasting/report endpoints.
++- `backend/requirements.txt` — scikit-learn 1.7.2.
++- `backend/forecast_data.py` (new) — minute sampling, temporal features, bounded SQLite history/reports/forecasts.
++- `backend/forecast_worker.py` (new) — identical evaluation pipeline, baseline, metrics, local estimators and prospective inference.
++- `backend/forecast_service.py` (new) — independent capture, worker scheduling, recovery and cached status.
++- `backend/forecast_cli.py` (new) — aggregate export and reproducible offline comparison.
++- `backend/test_forecast.py` (new) — isolated correctness/integration tests.
++- `frontend/src/App.tsx` — inserts the panel below the existing collector heatmap.
++- `frontend/src/ForecastComparison.tsx` (new) — progress, model comparison, explanatory insights, forecasts and matched actual errors.
++- `frontend/src/forecast.css` (new) — existing dark visual language and responsive table/panel rules.
++- `.gitignore` — excludes captured `data/`.
++- `README.md` — model method, setup, reproduction, data scope and limitations.
++- `VERIFICATION.md` — this report.
++
++Evidence: `verification/2026-10-22/forecast-panel.png`, `forecast-live-results.json`, `verify_forecast_live.py`, `forecast-changes.diff`, and pre-edit copies under `forecast-before/`. Captured aggregates are under ignored `data/`; no fixtures were inserted there.
++
++### Remaining limitations
++
++The real-data trained comparison and several-hour prospective accuracy evaluation could not yet be completed because genuine history is still accumulating. The ready-state score table and forecast display were checked against the API/type implementation, but were not browser-tested with a production-trained report. Unit/integration fixture results establish pipeline mechanics only, not predictive quality. No new 30-minute soak, calibrated FPS/heap profile, or model-worker peak-memory benchmark was performed. The two short live checks do not replace such measurements. Sampling observes availability every 0.5 s and can miss a shorter outage; an upstream stall the backend still marks connected is indistinguishable from quiet activity. Single chronological holdout results can change with collector coverage and routing regime; several days of observations are preferable for academic conclusions. First model import timing varied in this environment. Browser automation of the existing tab intermittently timed out; a fresh local production-preview tab completed the listed UI checks. No deployment or Git commit was made.

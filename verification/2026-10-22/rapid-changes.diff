@@ -1,0 +1,645 @@
+--- before/README.md
++++ after/README.md
+@@ -1,6 +1,6 @@
+ # Internet Pulse
+ 
+-A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, Redis, or Kafka. A separate forecasting layer records bounded minute aggregates in local SQLite and compares two regression models without changing BGP ingestion.
++A live BGP observatory built on the verified V1: **RIPE RIS Live → FastAPI → bounded in-memory rolling aggregation → WebSocket → React**. The original ingestion/reconnection pipeline is preserved. No generated traffic, Redis, or Kafka. A separate forecasting layer records bounded five-second aggregates in local SQLite and compares two regression models without changing BGP ingestion.
+ 
+ ## Setup
+ 
+@@ -133,32 +133,22 @@
+ 
+ Protocol reference: [RIPE RIS Live manual](https://ris-live.ripe.net/manual/).
+ 
+-## Routing forecasting comparison
++## Routing forecasting comparison — rapid live mode
+ 
+-The research question is: **Can two regression models predict next-minute observed BGP UPDATE volume better than repeating the previous minute?** This is forecasting collector observations, not detecting attacks, predicting global outages, or claiming Internet-wide visibility.
++Random Forest and Histogram Gradient Boosting predict the same **next aligned five-second UPDATE count**, compared with repeating the previous five-second count. The three-hour minimum has been removed. Five completed windows provide the inputs; eight labelled examples allow the first small comparison, normally **65–70 seconds** after a fresh healthy connection. Initial results are explicitly **PRELIMINARY**, not validated accuracy. Predictions need prior observations; errors need the later actual target count. Neither can be measured before those observations exist.
+ 
+-The backend automatically captures genuine, global, receipt-time minute aggregates in `data/forecast.sqlite3` (SQLite WAL). No prefixes or raw events are persisted by this feature. It retains 14 days, reads at most 4,326 recent rows for modelling, and retains the latest 20 evaluation reports. Startup partial minutes, observed upstream disconnections, missed sampling intervals, and missing minutes are excluded. A connected quiet minute is a valid zero. Five contiguous valid past minutes form each input and the following complete minute supplies its label. Dashboard scope filters do not affect this global training stream.
++The models use identical lagged counts, mean/std/min/max/change, latest withdrawal share, average path length, flap count, collector count and prefix-operation counts. Evaluation remains chronological 70/30 with a five-second embargo; no shuffled split or future data in the features. Reports expose MAE/RMSE in UPDATE counts per five seconds, measured fit/inference time, model size, exact fixed parameters, feature names, dependency versions, dataset hash and sample counts. At the initial eight-example threshold the holdout has only three observations, so comparisons can change rapidly. The PRELIMINARY flag remains until 180 examples; crossing that threshold is not a guarantee of reliability either.
+ 
+-Both **RandomForestRegressor** and **HistGradientBoostingRegressor**, from scikit-learn 1.7.2, solve the identical regression problem. Inputs are five lagged minute UPDATE counts, their mean/std/min/max and latest change, latest withdrawal share, average AS path length, flap count, collector count, announcements and withdrawals. These are derived from existing aggregate fields; routing/event semantics are unchanged. Each report records exact feature names, fixed parameters, dependency versions, dataset SHA-256, sample counts, time ranges, and model version.
++Both models are refit on all available past labels for prospective forecasting. Evaluations refresh after 30 seconds of new labelled data initially and 60 seconds after 180 examples. This is periodic batch retraining, not online `learn_one` learning. The worker remains separate from ingestion and uses one process/thread. A forecast must be generated within the first two seconds of its five-second window; late forecasts are skipped. Its actual generation time and interval are shown. Later completed actuals are matched to the stored predictions; invalid target capture is excluded.
+ 
+-At least **180 labelled examples** are required: approximately **3 hours 6 minutes** of uninterrupted genuine observations from a fresh start, depending on alignment and connection health. This is a practical collection threshold, not proof of statistical adequacy. The dashboard shows progress while collecting. It never displays fixture-trained scores. History survives backend restarts; gaps still invalidate the affected five-minute contexts.
+-
+-Evaluation uses the first 70% of examples for training and the later 30% for holdout, with a one-minute embargo between the final training label end and first holdout origin. The two models and repeat-previous-minute baseline use identical examples. There is no shuffling, hyperparameter search, random early-stopping split, or claim that model disagreement is a confidence interval. Metrics are **MAE and RMSE in UPDATE counts per 60-second window**, evaluation fit time, measured batch prediction milliseconds per row, and serialized model size. Baseline timing/size is not benchmarked. The report identifies lowest holdout MAE even when the baseline wins. Model-size measurement uses serialization only; no model files are loaded or deserialized.
+-
+-After evaluation, both live models are refit on all currently available past labelled examples. Initial training and hourly refresh run in one separate process with one computational thread; SQLite operations run outside the event loop. Minute sampling is independent of model jobs, and ingestion contains no model or database calls. API responses are cached in memory and fetched by an independent five-second frontend poll, not attached to every WebSocket snapshot. There is at most one training job and one prospective prediction job. A missed deadline skips that forecast; it never backfills a prediction using later observations.
+-
+-Prospective predictions are generated within the first five seconds of aligned minute `[t, t+60)`, using aggregates ending at `t`; actual generation time is recorded. Thus remaining lead time is approximately 55–60 seconds, not always a full 60 seconds from UI display. Predictions are stored before target completion and matched to actuals when a valid target minute matures. Incomplete targets are excluded. The UI reports prospective MAE for up to 60 matched predictions of the current model version (within its latest 120 captured forecasts), separately from the chronological holdout. Failed storage/training affects this feature only; live routing continues.
+-
+-Run from the repository root:
++Only genuine receipt-time aggregates are captured. Startup partials, disconnects and missed sampling intervals are excluded; connected quiet windows can be zero. The rapid dataset is stored separately in ignored `data/forecast-5s.sqlite3`, retaining one day of captured windows, the latest 20 reports and at most 4,326 rows (about six hours) per modelling read. The earlier `data/forecast.sqlite3` minute capture is preserved and is not relabelled or mixed into five-second forecasts. Database table/row names now refer to windows. Scope remains global; dashboard filters do not change model data.
+ 
+ ```powershell
+ .\.venv\Scripts\python.exe -m unittest discover -s backend -p "test_*.py" -v
+-.\.venv\Scripts\python.exe -m backend.forecast_cli export --output captured-minutes.csv
++.\.venv\Scripts\python.exe -m backend.forecast_cli export --output captured-windows.csv
+ .\.venv\Scripts\python.exe -m backend.forecast_cli evaluate --output evaluation.json
+ ```
+ 
+-CLI exports and comparisons use the same recent bounded capture window and feature implementation. An evaluation before enough history exists exits with a collection message and no scores. `/api/forecast` exposes collection state and comparisons; `/api/forecast/report` returns the latest report, or HTTP 409 during cold start. A retained report is identified as the last evaluation while models are warming up after restart. Keep a copy of the exported aggregates together with the report for exact experiment reproduction before retention removes them. Never import fixture data into the production capture database.
++The CLI, `/api/forecast` and `/api/forecast/report` use the same rapid dataset and definitions. Model metrics are experimental observed-stream forecasts, not attack detection, Internet-wide visibility or outage attribution. A single tiny chronological holdout establishes no predictive advantage; collect more data for an academic conclusion. Local model computation and no simulated observations are used. Sampling sees connection availability every 0.5 s and can miss shorter outages; an upstream stall still marked connected is indistinguishable from quiet activity. Initial imports, connection gaps or worker recovery can extend the normal warm-up.
+ 
+-Limitations: a single chronological holdout is not cross-validation or proof of generalization; neighboring windows have correlated inputs; several days and different routing conditions are preferable for a final academic comparison. Collector coverage and connection changes can affect counts. Availability is checked at sampling resolution (0.5 s), so an outage entirely between observations can escape detection. A stalled upstream that the backend still considers connected cannot be distinguished from genuine quiet activity by this layer. Forecast jobs may skip windows during refresh or worker recovery. This implementation introduces local SQLite and the scikit-learn backend dependency, but no new frontend dependency, simulated observations, or dashboard chart types.
+-
+-Method references: [scikit-learn time-series lagged-feature evaluation](https://scikit-learn.org/stable/auto_examples/applications/plot_time_series_lagged_features.html), [Random Forest regressor](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.RandomForestRegressor.html), [Histogram Gradient Boosting regressor](https://scikit-learn.org/stable/modules/generated/sklearn.ensemble.HistGradientBoostingRegressor.html).
++For a future online-learning comparison, River's online linear regression and Hoeffding Adaptive Tree regressor support incremental updates. These are documented alternatives, **not installed or substituted** by the rapid-window change. A fair evaluation would predict first, wait for the real outcome, update both models' error metrics, and only then train on that outcome.
+--- before/VERIFICATION.md
++++ after/VERIFICATION.md
+@@ -252,3 +252,23 @@
+ ### Remaining limitations
+ 
+ The real-data trained comparison and several-hour prospective accuracy evaluation could not yet be completed because genuine history is still accumulating. The ready-state score table and forecast display were checked against the API/type implementation, but were not browser-tested with a production-trained report. Unit/integration fixture results establish pipeline mechanics only, not predictive quality. No new 30-minute soak, calibrated FPS/heap profile, or model-worker peak-memory benchmark was performed. The two short live checks do not replace such measurements. Sampling observes availability every 0.5 s and can miss a shorter outage; an upstream stall the backend still marks connected is indistinguishable from quiet activity. Single chronological holdout results can change with collector coverage and routing regime; several days of observations are preferable for academic conclusions. First model import timing varied in this environment. Browser automation of the existing tab intermittently timed out; a fresh local production-preview tab completed the listed UI checks. No deployment or Git commit was made.
++
++
++## Rapid live forecasting — supersedes the three-hour warm-up
++
++Following the user's request for immediate use of arriving traffic, the active target is now **next aligned five-second UPDATE count**. The original minute database is preserved separately and is never rescaled, split into fabricated samples, or mixed with five-second capture. Eight genuine labelled examples plus five input windows allow the first comparison after approximately 65–70 seconds from a healthy fresh connection. It refreshes after 30 seconds of new labels initially, then after 60 seconds once 180 examples exist. Early results remain marked PRELIMINARY until 180 examples, and that threshold still does not certify accuracy. First fit uses four training and three chronological holdout samples with a five-second embargo; this is deliberately disclosed as a very small comparison.
++
++Both models remain Random Forest and Histogram Gradient Boosting. Both now use a fixed minimum leaf size of two so that they can learn from small initial samples; other recorded fixed parameters are preserved. Both train on identical inputs/targets/splits. This remains periodic batch retraining, not online model updates. The UI explicitly labels all forecast/error units as five seconds, displays the real holdout counts, and does not present these small results as validated accuracy.
++
++- Backend suite: **26 tests PASS**, final run 5.617 s, including a new smallest-sample test verifying 8 examples, 4 train/3 holdout, 5-second horizon/embargo and preliminary flag.
++- TypeScript and production build: **PASS**. JS 964.20 kB / 293.30 kB gzip, CSS 37.18 kB / 8.98 kB gzip. Existing chunk advisory remains; no frontend dependencies added.
++- Existing frontend connection regression checks: **8 PASS**.
++- Genuine running pipeline: **PASS**. First real report used 14 examples, 8 training and 5 held-out windows. Recorded status `ready`, horizon 5 seconds, preliminary `True`. Both model scores and baseline were populated from captured live observations. Prospective predictions were stored and subsequently matched to actual captured counts; 2 completed current-version forecasts existed at the saved checkpoint. These counts continue changing.
++- Browser: **PASS**. Observed real score table, preliminary warning, holdout timestamps/counts, generated predictions and matched prospective errors. No captured console errors/warnings. Later refresh changed the lowest-MAE model, demonstrating why early rankings are preliminary.
++- Responsive ready state: desktop 1280x1000 checked visually. At 390x844, document width 386 px, forecast panel ~362 px, table scroll viewport 361 px and content 668 px: the table scrolls inside the panel without page overflow.
++- Storage: rapid capture uses `data/forecast-5s.sqlite3`, one-day retention and at most 4,326 rows per modelling read (~six hours); 20 reports retained. Original `data/forecast.sqlite3` is preserved. Ingestion, metadata resolution and ordinary dashboard metric semantics are unchanged.
++- Forecast deadline: generated within the first two seconds of its five-second interval; late forecasts are skipped. This gives approximately 3–5 seconds remaining lead time, not a full five seconds after UI arrival. Existing five-second UI polling can display a forecast close to or after its target boundary; generation and target timestamps identify that timing.
++
++Changed source/docs: `backend/forecast_data.py`, `backend/forecast_worker.py`, `backend/forecast_service.py`, `backend/forecast_cli.py`, `backend/test_forecast.py`, `frontend/src/ForecastComparison.tsx`, `README.md`, `VERIFICATION.md`. Evidence: `rapid-live-results.json`, `rapid-panel.png`, `rapid-changes.diff`; previous files retained in `rapid-before/`. No new package, deployment or commit. River online linear regression and Hoeffding Adaptive Tree were discussed as alternatives only; neither was installed nor silently substituted.
++
++Limitations: these are genuine but very small-sample results. No new long-duration soak or statistically meaningful generalization claim. Online alternatives would also need real outcomes before meaningful error measurement and learning; no model can demonstrate accuracy from unseen future labels. Prior sections describing the minute target and 180-example startup are historical and superseded by this section.
+--- before/backend\forecast_cli.py
++++ after/backend\forecast_cli.py
+@@ -10,7 +10,7 @@
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument('action', choices=['evaluate', 'export'])
+-    parser.add_argument('--db', type=Path, default=Path(__file__).resolve().parents[1]/'data'/'forecast.sqlite3')
++    parser.add_argument('--db', type=Path, default=Path(__file__).resolve().parents[1]/'data'/'forecast-5s.sqlite3')
+     parser.add_argument('--output', type=Path, required=True)
+     args = parser.parse_args()
+     rows, _, _ = HistoryStore(args.db).read()
+--- before/backend\forecast_data.py
++++ after/backend\forecast_data.py
+@@ -1,21 +1,22 @@
+-"""Receipt-time minute aggregates and strictly past-only forecasting features."""
++"""Receipt-time window aggregates and strictly past-only forecasting features."""
+ import hashlib
+ import json
+ import sqlite3
+ from contextlib import contextmanager
+ from pathlib import Path
+ 
+-MIN_EXAMPLES = 180
+-RETENTION = 14 * 86400
++INTERVAL = 5
++MIN_EXAMPLES = 8
++RETENTION = 86400
+ FEATURES = [*[f"updates_lag_{i}" for i in range(1, 6)], "updates_mean_5", "updates_std_5",
+             "updates_min_5", "updates_max_5", "updates_change", "withdrawal_share",
+             "average_path_length", "flaps", "active_collectors", "announcements", "withdrawals"]
+ 
+ 
+ def features(rows, origin):
+-    """Forecast [origin, origin+60), using only five preceding complete minutes."""
+-    by_time = {r['minute']: r for r in rows}
+-    past = [by_time.get(origin - i * 60) for i in range(1, 6)]
++    """Forecast [origin, origin+INTERVAL), using only five preceding complete windows."""
++    by_time = {r['window']: r for r in rows}
++    past = [by_time.get(origin - i * INTERVAL) for i in range(1, 6)]
+     if any(r is None or not r['valid'] for r in past):
+         return None
+     values = [r['updates'] for r in past]
+@@ -28,14 +29,14 @@
+ 
+ 
+ def examples(rows):
+-    # Bounded at three days for predictable training cost.
+-    rows = sorted(rows, key=lambda r: r['minute'])[-4326:]
++    # Bounded at six hours for predictable training cost.
++    rows = sorted(rows, key=lambda r: r['window'])[-4326:]
+     output = []
+     for i, row in enumerate(rows):
+         if row['valid']:
+-            x = features(rows[max(0, i-5):i], row['minute'])
++            x = features(rows[max(0, i-5):i], row['window'])
+             if x is not None:
+-                output.append(dict(origin=row['minute'], x=x, y=row['updates']))
++                output.append(dict(origin=row['window'], x=x, y=row['updates']))
+     return output
+ 
+ 
+@@ -43,16 +44,16 @@
+     return hashlib.sha256(json.dumps(samples, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+ 
+ 
+-class MinuteSampler:
++class WindowSampler:
+     """Copies completed scalar buckets; never called on the per-event ingest path.
+ 
+     Both ends of each one-second interval must observe an upstream connection.
+-    A missed sampling interval invalidates the minute rather than guessing zeros.
++    A missed sampling interval invalidates the window rather than guessing zeros.
+     """
+     def __init__(self):
+         self.previous_second = None
+         self.previous_connected = False
+-        self.minute = None
++        self.window = None
+         self.seconds = 0
+         self.row = None
+         self.collectors = set()
+@@ -64,14 +65,14 @@
+             self.previous_connected = self.previous_connected and connected
+             return None
+         completed = second - 1
+-        minute = completed // 60 * 60
++        window = completed // INTERVAL * INTERVAL
+         continuous = self.previous_second == completed and self.previous_connected and connected
+         self.previous_second, self.previous_connected = second, connected
+-        if self.minute != minute:
+-            self.minute = minute
++        if self.window != window:
++            self.window = window
+             self.seconds = 0
+             self.collectors = set()
+-            self.row = dict(minute=minute, updates=0, announcements=0, withdrawals=0,
++            self.row = dict(window=window, updates=0, announcements=0, withdrawals=0,
+                             path_sum=0, path_count=0, flaps=0, collectors=0, valid=True, reason='')
+         self.seconds += 1
+         if not continuous:
+@@ -82,11 +83,11 @@
+             for key in ('updates', 'announcements', 'withdrawals', 'path_sum', 'path_count', 'flaps'):
+                 self.row[key] += bucket[key]
+             self.collectors.update(bucket['collectors'])
+-        if completed % 60 != 59:
++        if completed % INTERVAL != INTERVAL-1:
+             return None
+-        self.row['valid'] = self.row['valid'] and self.seconds == 60
++        self.row['valid'] = self.row['valid'] and self.seconds == INTERVAL
+         if not self.row['valid'] and not self.row['reason']:
+-            self.row['reason'] = 'Incomplete minute'
++            self.row['reason'] = 'Incomplete window'
+         self.row['collectors'] = len(self.collectors)
+         return dict(self.row)
+ 
+@@ -101,7 +102,7 @@
+         connection = sqlite3.connect(self.path, timeout=5)
+         try:
+             connection.execute('PRAGMA journal_mode=WAL')
+-            connection.execute('CREATE TABLE IF NOT EXISTS minutes (minute INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
++            connection.execute('CREATE TABLE IF NOT EXISTS windows (window INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
+             connection.execute('CREATE TABLE IF NOT EXISTS reports (created INTEGER PRIMARY KEY, payload TEXT NOT NULL)')
+             connection.execute('CREATE TABLE IF NOT EXISTS forecasts (origin INTEGER PRIMARY KEY, version TEXT NOT NULL, payload TEXT NOT NULL)')
+             with connection:
+@@ -111,30 +112,30 @@
+ 
+     def read(self):
+         with self.connect() as db:
+-            rows = [json.loads(r[0]) for r in db.execute('SELECT payload FROM minutes ORDER BY minute DESC LIMIT 4326')][::-1]
++            rows = [json.loads(r[0]) for r in db.execute('SELECT payload FROM windows ORDER BY window DESC LIMIT 4326')][::-1]
+             report = db.execute('SELECT payload FROM reports ORDER BY created DESC LIMIT 1').fetchone()
+             predictions = [json.loads(r[0]) for r in db.execute('SELECT payload FROM forecasts ORDER BY origin DESC LIMIT 120')]
+         return rows, json.loads(report[0]) if report else None, predictions
+ 
+-    def save_minute(self, row):
++    def save_window(self, row):
+         with self.connect() as db:
+             # Never silently replace previously captured history after a clock rollback.
+-            db.execute('INSERT OR IGNORE INTO minutes VALUES (?, ?)', (row['minute'], json.dumps(row)))
+-            row = json.loads(db.execute('SELECT payload FROM minutes WHERE minute=?', (row['minute'],)).fetchone()[0])
+-            pending = db.execute('SELECT origin, payload FROM forecasts WHERE origin=?', (row['minute'],)).fetchone()
++            db.execute('INSERT OR IGNORE INTO windows VALUES (?, ?)', (row['window'], json.dumps(row)))
++            row = json.loads(db.execute('SELECT payload FROM windows WHERE window=?', (row['window'],)).fetchone()[0])
++            pending = db.execute('SELECT origin, payload FROM forecasts WHERE origin=?', (row['window'],)).fetchone()
+             if pending:
+                 prediction = json.loads(pending[1])
+                 prediction.update(actual=row['updates'] if row['valid'] else None,
+-                                  outcome='observed' if row['valid'] else 'excluded: incomplete target minute')
+-                db.execute('UPDATE forecasts SET payload=? WHERE origin=?', (json.dumps(prediction), row['minute']))
+-            # A restart or a long sampler gap may mean a target minute was never captured.
+-            for origin, payload in db.execute('SELECT origin, payload FROM forecasts WHERE origin < ?', (row['minute'],)).fetchall():
++                                  outcome='observed' if row['valid'] else 'excluded: incomplete target window')
++                db.execute('UPDATE forecasts SET payload=? WHERE origin=?', (json.dumps(prediction), row['window']))
++            # A restart or a long sampler gap may mean a target window was never captured.
++            for origin, payload in db.execute('SELECT origin, payload FROM forecasts WHERE origin < ?', (row['window'],)).fetchall():
+                 prediction = json.loads(payload)
+                 if prediction['outcome'] == 'pending':
+                     prediction['outcome'] = 'excluded: missing target capture'
+                     db.execute('UPDATE forecasts SET payload=? WHERE origin=?', (json.dumps(prediction), origin))
+-            cutoff = row['minute'] - RETENTION
+-            db.execute('DELETE FROM minutes WHERE minute < ?', (cutoff,))
++            cutoff = row['window'] - RETENTION
++            db.execute('DELETE FROM windows WHERE window < ?', (cutoff,))
+             db.execute('DELETE FROM forecasts WHERE origin < ?', (cutoff,))
+ 
+     def save_forecast(self, prediction):
+--- before/backend\forecast_service.py
++++ after/backend\forecast_service.py
+@@ -1,11 +1,11 @@
+-"""Non-blocking orchestration: bounded minute storage and one model worker."""
++"""Non-blocking orchestration: bounded window storage and one model worker."""
+ import asyncio
+ import logging
+ import multiprocessing
+ import time
+ from concurrent.futures import ProcessPoolExecutor
+ from pathlib import Path
+-from backend.forecast_data import HistoryStore, MinuteSampler, MIN_EXAMPLES, examples, features
++from backend.forecast_data import HistoryStore, WindowSampler, MIN_EXAMPLES, INTERVAL, examples, features
+ from backend import forecast_worker
+ 
+ log = logging.getLogger('internet-pulse.forecast')
+@@ -14,8 +14,8 @@
+ class ForecastService:
+     def __init__(self, pulse, path=None):
+         self.pulse = pulse
+-        self.store = HistoryStore(path or Path(__file__).resolve().parents[1]/'data'/'forecast.sqlite3')
+-        self.sampler = MinuteSampler()
++        self.store = HistoryStore(path or Path(__file__).resolve().parents[1]/'data'/'forecast-5s.sqlite3')
++        self.sampler = WindowSampler()
+         self.rows, self.report, self.predictions = [], None, []
+         self.pool = None
+         self.job = None
+@@ -42,11 +42,11 @@
+                           else 'ready' if self.ready else 'collecting', error=self.error,
+                           scope='Global observed stream; dashboard filters do not apply',
+                           eligible_examples=count, minimum_examples=MIN_EXAMPLES,
+-                          valid_minutes=sum(bool(r['valid']) for r in self.rows),
+-                          excluded_minutes=sum(not r['valid'] for r in self.rows),
++                          valid_windows=sum(bool(r['valid']) for r in self.rows),
++                          excluded_windows=sum(not r['valid'] for r in self.rows),
+                           report=self.report, forecasts=self.predictions[:6],
+                           prospective=dict(samples=len(matched), scores=prospective),
+-                          updated_at=time.time())
++                          horizon_seconds=INTERVAL, updated_at=time.time())
+ 
+     async def reload(self):
+         self.rows, self.report, self.predictions = await asyncio.to_thread(self.store.read)
+@@ -55,7 +55,7 @@
+     async def forecast(self, x, origin):
+         try:
+             p = await asyncio.get_running_loop().run_in_executor(self.executor(), forecast_worker.predict, x, origin)
+-            if p['generated_at'] < origin+5:
++            if origin <= p['generated_at'] < origin+2:
+                 await asyncio.to_thread(self.store.save_forecast, p)
+                 await self.reload()
+                 self.publish()
+@@ -64,7 +64,7 @@
+         except Exception:
+             log.exception('Forecast inference failed; live ingestion continues')
+             self.ready = False
+-            self.error = 'Model inference unavailable; retrying in five minutes. See backend log.'
++            self.error = 'Model inference unavailable; retrying in five windows. See backend log.'
+             self.retry_at = time.time()+300
+             if self.pool:
+                 self.pool.shutdown(wait=False, cancel_futures=True)
+@@ -88,7 +88,7 @@
+             raise
+         except Exception:
+             log.exception('Forecast training failed; live ingestion continues')
+-            self.error = 'Model training unavailable; retrying in five minutes. See backend log.'
++            self.error = 'Model training unavailable; retrying in five windows. See backend log.'
+             self.retry_at = time.time()+300
+             self.ready = False
+             if self.pool:
+@@ -114,20 +114,20 @@
+                     now = time.time()
+                     row = self.sampler.sample(now, self.pulse.connected, self.pulse.buckets)
+                     if row:
+-                        await asyncio.to_thread(self.store.save_minute, row)
++                        await asyncio.to_thread(self.store.save_window, row)
+                         await self.reload()
+                         if self.error and self.error.startswith('Forecast history'):
+                             self.error = None
+                     samples = self.samples
+                     if (len(samples) >= MIN_EXAMPLES and now >= self.retry_at and
+                         (self.job is None or self.job.done()) and
+-                        (not self.ready or samples[-1]['origin']-self.last_fit_origin >= 3600)):
++                        (not self.ready or samples[-1]['origin']-self.last_fit_origin >= (30 if len(samples) < 180 else 60))):
+                         self.job = asyncio.create_task(self.fit(samples))
+-                    origin = int(now)//60*60
++                    origin = int(now)//INTERVAL*INTERVAL
+                     # Skip late forecasts: never backfill predictions after seeing the target.
+                     if (self.ready and (self.job is None or self.job.done()) and
+                         (self.prediction_job is None or self.prediction_job.done()) and
+-                        now-origin < 5 and origin != self.last_attempt):
++                        now-origin < 2 and origin != self.last_attempt):
+                         self.last_attempt = origin
+                         x = features(self.rows[-5:], origin)
+                         if x is not None and self.report['live_fit_label_end'] <= origin:
+--- before/backend\forecast_worker.py
++++ after/backend\forecast_worker.py
+@@ -3,7 +3,7 @@
+ import pickle
+ import platform
+ import time
+-from backend.forecast_data import FEATURES, MIN_EXAMPLES, fingerprint
++from backend.forecast_data import FEATURES, MIN_EXAMPLES, INTERVAL, fingerprint
+ 
+ _models = None
+ _version = None
+@@ -23,8 +23,8 @@
+ def split(samples):
+     boundary = int(len(samples) * .7)
+     test = samples[boundary:]
+-    # Training labels end at least one minute before the first holdout origin.
+-    train = [s for s in samples[:boundary] if s['origin'] + 60 <= test[0]['origin'] - 60]
++    # Training labels end at least one window before the first holdout origin.
++    train = [s for s in samples[:boundary] if s['origin'] + INTERVAL <= test[0]['origin'] - INTERVAL]
+     return train, test
+ 
+ 
+@@ -42,9 +42,9 @@
+     xt = np.asarray([s['x'] for s in test], dtype=float)
+     yt = [s['y'] for s in test]
+     params = {
+-        'random_forest': dict(n_estimators=80, max_depth=8, min_samples_leaf=3, n_jobs=1, random_state=42),
++        'random_forest': dict(n_estimators=80, max_depth=8, min_samples_leaf=2, n_jobs=1, random_state=42),
+         'hist_gradient_boosting': dict(max_iter=100, max_leaf_nodes=15, learning_rate=.06,
+-                                       min_samples_leaf=10, l2_regularization=.1, early_stopping=False, random_state=42)}
++                                       min_samples_leaf=2, l2_regularization=.1, early_stopping=False, random_state=42)}
+     candidates = {'random_forest': RandomForestRegressor(**params['random_forest']),
+                   'hist_gradient_boosting': HistGradientBoostingRegressor(**params['hist_gradient_boosting'])}
+     scores = {'baseline': dict(**metrics(yt, [s['x'][0] for s in test]), train_seconds=0,
+@@ -68,20 +68,21 @@
+     _version = fingerprint(samples)[:16]
+     best = min(scores, key=lambda k: scores[k]['mae'])
+     if best == 'baseline':
+-        insight = 'Repeating the previous minute performs at least as well as both models on holdout MAE.'
++        insight = 'Repeating the previous window performs at least as well as both models on holdout MAE.'
+     else:
+         gain = scores['baseline']['mae'] - scores[best]['mae']
+         relative = f" ({gain/scores['baseline']['mae']*100:.1f}%)" if scores['baseline']['mae'] else ''
+         insight = (f'{best.replace("_", " ")} has the lowest holdout MAE, '
+                    f'{gain:,.1f} UPDATEs{relative} lower than the baseline.')
+     return dict(created_at=int(time.time()), version=_version, dataset_sha256=fingerprint(samples),
+-                target='RIPE RIS Live observed UPDATE count in the next aligned minute', horizon_seconds=60,
++                target='RIPE RIS Live observed UPDATE count in the next aligned five-second window', horizon_seconds=INTERVAL,
++                preliminary=len(samples) < 180,
+                 scope='Global observed stream; dashboard filters do not apply', feature_names=FEATURES,
+                 samples=len(samples), train_samples=len(train_rows), test_samples=len(test),
+-                train_start=train_rows[0]['origin'], train_end=train_rows[-1]['origin']+60,
+-                test_start=test[0]['origin'], test_end=test[-1]['origin']+60,
+-                embargo_seconds=60, split='Chronological 70/30; no shuffling or hyperparameter search',
+-                live_fit_samples=len(samples), live_fit_label_end=samples[-1]['origin']+60,
++                train_start=train_rows[0]['origin'], train_end=train_rows[-1]['origin']+INTERVAL,
++                test_start=test[0]['origin'], test_end=test[-1]['origin']+INTERVAL,
++                embargo_seconds=INTERVAL, split='Chronological 70/30; no shuffling or hyperparameter search',
++                live_fit_samples=len(samples), live_fit_label_end=samples[-1]['origin']+INTERVAL,
+                 versions=dict(python=platform.python_version(), sklearn=sklearn.__version__, numpy=np.__version__),
+                 parameters=params, scores=scores, best_mae=best,
+                 insight=insight+' This is an observed-stream forecast, not an outage or attack detector.')
+@@ -93,5 +94,5 @@
+         raise RuntimeError('Models have not been trained')
+     with threadpool_limits(limits=1):
+         values = {key: max(0., float(model.predict([x])[0])) for key, model in _models.items()}
+-    return dict(origin=origin, target_end=origin+60, generated_at=time.time(), version=_version,
++    return dict(origin=origin, target_end=origin+INTERVAL, generated_at=time.time(), version=_version,
+                 predictions=dict(values, baseline=x[0]), actual=None, outcome='pending')
+--- before/backend\test_forecast.py
++++ after/backend\test_forecast.py
+@@ -8,40 +8,40 @@
+ from multiprocessing import get_context
+ from pathlib import Path
+ from types import SimpleNamespace
+-from backend.forecast_data import FEATURES, MIN_EXAMPLES, HistoryStore, MinuteSampler, examples, features
++from backend.forecast_data import FEATURES, MIN_EXAMPLES, INTERVAL, HistoryStore, WindowSampler, examples, features
+ from backend.forecast_service import ForecastService
+ from backend import forecast_worker
+ 
+ 
+ def fixture_rows(count=200):
+-    return [dict(minute=i*60, updates=100+i%17*3, announcements=90, withdrawals=i%7,
++    return [dict(window=i*INTERVAL, updates=100+i%17*3, announcements=90, withdrawals=i%7,
+                  path_sum=400, path_count=100, flaps=1, collectors=3, valid=True, reason='') for i in range(count)]
+ 
+ 
+ class FeatureTests(unittest.TestCase):
+     def test_only_past_features_and_future_target(self):
+         rows = fixture_rows(8)
+-        x = features(rows, 300)
++        x = features(rows, 5*INTERVAL)
+         self.assertEqual(len(x), len(FEATURES))
+         self.assertEqual(x[:5], [112, 109, 106, 103, 100])
+         rows[5]['updates'] = 99999
+-        self.assertEqual(features(rows, 300), x)
++        self.assertEqual(features(rows, 5*INTERVAL), x)
+         sample = examples(rows)[0]
+-        self.assertEqual(sample['origin'], 300)
++        self.assertEqual(sample['origin'], 5*INTERVAL)
+         self.assertEqual(sample['y'], 99999)
+         self.assertEqual(sample['x'], x)
+ 
+-    def test_missing_and_invalid_minutes_exclude_examples(self):
++    def test_missing_and_invalid_windows_exclude_examples(self):
+         rows = fixture_rows(12)
+         rows[5]['valid'] = False
+-        self.assertEqual([s['origin'] for s in examples(rows)], [660])
++        self.assertEqual([s['origin'] for s in examples(rows)], [11*INTERVAL])
+         del rows[5]
+-        self.assertEqual([s['origin'] for s in examples(rows)], [660])
++        self.assertEqual([s['origin'] for s in examples(rows)], [11*INTERVAL])
+ 
+     def test_split_has_embargo_and_shared_test_targets(self):
+         samples = examples(fixture_rows())
+         train, test = forecast_worker.split(samples)
+-        self.assertLessEqual(train[-1]['origin']+60, test[0]['origin']-60)
++        self.assertLessEqual(train[-1]['origin']+INTERVAL, test[0]['origin']-INTERVAL)
+         self.assertTrue(all(s['origin'] < test[0]['origin'] for s in train))
+         self.assertEqual(len(test), len(samples)-int(len(samples)*.7))
+ 
+@@ -52,33 +52,33 @@
+ 
+ 
+ class SamplerTests(unittest.TestCase):
+-    def test_connected_quiet_complete_minute_is_valid_zero(self):
+-        sampler = MinuteSampler()
+-        sampler.sample(60, True, [])
+-        for second in range(61, 121):
++    def test_connected_quiet_complete_window_is_valid_zero(self):
++        sampler = WindowSampler()
++        sampler.sample(5, True, [])
++        for second in range(6, 11):
+             row = sampler.sample(second, True, [])
+         self.assertTrue(row['valid'])
+         self.assertEqual(row['updates'], 0)
+-        self.assertEqual(row['minute'], 60)
++        self.assertEqual(row['window'], 5)
+ 
+     def test_partial_startup_outage_and_sampler_gap(self):
+         for bad in ('startup', 'disconnect', 'gap'):
+-            sampler = MinuteSampler()
+-            start = 80 if bad == 'startup' else 60
+-            for second in range(start, 121):
+-                if bad == 'gap' and second == 90:
++            sampler = WindowSampler()
++            start = 7 if bad == 'startup' else 5
++            for second in range(start, 11):
++                if bad == 'gap' and second == 8:
+                     continue
+-                row = sampler.sample(second, not (bad == 'disconnect' and second == 90), [])
++                row = sampler.sample(second, not (bad == 'disconnect' and second == 8), [])
+             self.assertFalse(row['valid'], bad)
+ 
+     def test_bucket_scalars_and_collectors_are_copied_once(self):
+-        sampler = MinuteSampler()
+-        buckets = deque([dict(second=60, updates=7, announcements=10, withdrawals=2,
++        sampler = WindowSampler()
++        buckets = deque([dict(second=5, updates=7, announcements=10, withdrawals=2,
+                               path_sum=28, path_count=7, flaps=1, collectors=Counter({'rrc00':7}))])
+-        sampler.sample(60, True, buckets)
+-        sampler.sample(61, True, buckets)
+-        sampler.sample(61.5, True, buckets)
+-        for second in range(62, 121):
++        sampler.sample(5, True, buckets)
++        sampler.sample(6, True, buckets)
++        sampler.sample(6.5, True, buckets)
++        for second in range(7, 11):
+             row = sampler.sample(second, True, buckets)
+         self.assertTrue(row['valid'])
+         self.assertEqual((row['updates'], row['collectors'], row['announcements']), (7, 1, 10))
+@@ -88,20 +88,20 @@
+     def test_maturation_zero_actual_invalid_target_and_retention(self):
+         with tempfile.TemporaryDirectory() as folder:
+             store = HistoryStore(Path(folder)/'test.sqlite3')
+-            prediction = dict(origin=60, version='test', actual=None, outcome='pending', predictions={'baseline':1})
++            prediction = dict(origin=INTERVAL, version='test', actual=None, outcome='pending', predictions={'baseline':1})
+             store.save_forecast(prediction)
+             self.assertIsNone(store.read()[2][0]['actual'])
+             row = fixture_rows(2)[1]
+             row['updates'] = 0
+-            store.save_minute(row)
++            store.save_window(row)
+             self.assertEqual(store.read()[2][0]['actual'], 0)
+-            prediction.update(origin=120)
++            prediction.update(origin=2*INTERVAL)
+             store.save_forecast(prediction)
+-            row.update(minute=120, valid=False)
+-            store.save_minute(row)
++            row.update(window=2*INTERVAL, valid=False)
++            store.save_window(row)
+             self.assertTrue(store.read()[2][0]['outcome'].startswith('excluded'))
+-            row.update(minute=15*86400)
+-            store.save_minute(row)
++            row.update(window=15*86400)
++            store.save_window(row)
+             self.assertEqual(len(store.read()[0]), 1)
+             self.assertEqual(store.read()[2], [])
+ 
+@@ -109,9 +109,9 @@
+         with tempfile.TemporaryDirectory() as folder:
+             store = HistoryStore(Path(folder)/'test.sqlite3')
+             row = fixture_rows(1)[0]
+-            store.save_minute(row)
++            store.save_window(row)
+             row['updates'] = 9999
+-            store.save_minute(row)
++            store.save_window(row)
+             self.assertEqual(store.read()[0][0]['updates'], 100)
+ 
+     def test_cold_start_has_no_report_or_scores(self):
+@@ -122,6 +122,18 @@
+ 
+ 
+ class WorkerTests(unittest.TestCase):
++    def test_minimum_live_sample_is_preliminary(self):
++        samples = examples(fixture_rows(MIN_EXAMPLES+5))
++        with ProcessPoolExecutor(max_workers=1, mp_context=get_context('spawn'), initializer=forecast_worker.initialize) as executor:
++            report = executor.submit(forecast_worker.train, samples).result(timeout=60)
++        self.assertEqual(report['samples'], 8)
++        self.assertEqual(report['train_samples'], 4)
++        self.assertEqual(report['test_samples'], 3)
++        self.assertTrue(report['preliminary'])
++        self.assertEqual(report['horizon_seconds'], 5)
++        self.assertEqual(report['embargo_seconds'], 5)
++        json.dumps(report, allow_nan=False)
++
+     def test_both_models_in_spawned_worker_and_real_prediction_maturation(self):
+         # Explicit isolated test fixture, never the production HistoryStore.
+         rows = fixture_rows(200)
+@@ -129,7 +141,7 @@
+         self.assertGreaterEqual(len(samples), MIN_EXAMPLES)
+         with ProcessPoolExecutor(max_workers=1, mp_context=get_context('spawn'), initializer=forecast_worker.initialize) as executor:
+             report = executor.submit(forecast_worker.train, samples).result(timeout=60)
+-            prediction = executor.submit(forecast_worker.predict, features(rows, 12000), 12000).result(timeout=15)
++            prediction = executor.submit(forecast_worker.predict, features(rows, 200*INTERVAL), 200*INTERVAL).result(timeout=15)
+         self.assertEqual(set(report['scores']), {'baseline', 'random_forest', 'hist_gradient_boosting'})
+         self.assertEqual(report['scores']['baseline']['mae'],
+                          forecast_worker.metrics([s['y'] for s in forecast_worker.split(samples)[1]],
+@@ -146,7 +158,7 @@
+             store.save_report(report)
+             store.save_forecast(prediction)
+             row = fixture_rows(201)[-1]
+-            store.save_minute(row)
++            store.save_window(row)
+             self.assertEqual(store.read()[2][0]['actual'], row['updates'])
+ 
+ 
+@@ -172,7 +184,7 @@
+             service = ForecastService(pulse, Path(folder)/'test.sqlite3')
+             def seed():
+                 for row in fixture_rows(190):
+-                    service.store.save_minute(row)
++                    service.store.save_window(row)
+             await asyncio.to_thread(seed)
+             training_started = asyncio.Event()
+             training_release = asyncio.Event()
+@@ -195,10 +207,10 @@
+             try:
+                 await asyncio.wait_for(training_started.wait(), timeout=5)
+                 for _ in range(30):
+-                    if any(r['minute'] == emitted['minute'] for r in service.rows):
++                    if any(r['window'] == emitted['window'] for r in service.rows):
+                         break
+                     await asyncio.sleep(.1)
+-                self.assertTrue(any(r['minute'] == emitted['minute'] for r in service.rows))
++                self.assertTrue(any(r['window'] == emitted['window'] for r in service.rows))
+                 self.assertFalse(service.job.done())
+             finally:
+                 task.cancel()
+--- before/frontend\src\ForecastComparison.tsx
++++ after/frontend\src\ForecastComparison.tsx
+@@ -2,10 +2,10 @@
+ 
+ type Score={mae:number;rmse:number;train_seconds:number;inference_ms_per_row:number;model_bytes:number};
+ type ModelKey='random_forest'|'hist_gradient_boosting'|'baseline';
+-type Report={version:string;samples:number;train_samples:number;test_samples:number;train_start:number;train_end:number;test_start:number;test_end:number;created_at:number;scores:Record<ModelKey,Score>;insight:string};
++type Report={version:string;samples:number;train_samples:number;test_samples:number;train_start:number;train_end:number;test_start:number;test_end:number;created_at:number;preliminary:boolean;scores:Record<ModelKey,Score>;insight:string};
+ type Forecast={origin:number;target_end:number;generated_at:number;version:string;predictions:Record<ModelKey,number>;actual:number|null;outcome:string};
+-type State={status:string;error:string|null;eligible_examples:number;minimum_examples:number;valid_minutes:number;excluded_minutes:number;report:Report|null;forecasts:Forecast[];prospective:{samples:number;scores:Record<ModelKey,Score>|null}};
+-const names:Record<ModelKey,string>={random_forest:'Random Forest',hist_gradient_boosting:'Histogram Gradient Boosting',baseline:'Repeat previous minute'};
++type State={status:string;error:string|null;eligible_examples:number;minimum_examples:number;valid_windows:number;excluded_windows:number;report:Report|null;forecasts:Forecast[];prospective:{samples:number;scores:Record<ModelKey,Score>|null}};
++const names:Record<ModelKey,string>={random_forest:'Random Forest',hist_gradient_boosting:'Histogram Gradient Boosting',baseline:'Repeat previous 5 seconds'};
+ const keys=Object.keys(names) as ModelKey[];
+ const num=new Intl.NumberFormat(undefined,{maximumFractionDigits:0});
+ const date=(v:number)=>new Date(v*1000).toLocaleString();
+@@ -18,15 +18,15 @@
+  },[]);
+  const report=data?.report,latest=data?.forecasts[0];
+  return <section className="panel forecast-panel" id="forecast-insights" aria-label="Routing forecast model comparison">
+-  <div className="section-heading"><div><h2>Routing forecast comparison</h2><p>Two models, one target: observed UPDATE count in the next aligned minute</p></div><span className="badge">GLOBAL · {data?.status.toUpperCase()??'LOADING'}</span></div>
+-  <p className="forecast-note">Random Forest and Histogram Gradient Boosting use the same inputs and target, compared with a repeat-previous-minute baseline. Uses all observed RIS traffic; dashboard filters do not apply. Forecasts describe this collector stream, not the entire Internet.</p>
++  <div className="section-heading"><div><h2>Routing forecast comparison</h2><p>Two models, one target: observed UPDATE count in the next 5 seconds</p></div><span className="badge">GLOBAL · {report?.preliminary?'PRELIMINARY':data?.status.toUpperCase()??'LOADING'}</span></div>
++  <p className="forecast-note">Random Forest and Histogram Gradient Boosting use the same inputs and target, compared with a repeat-previous-window baseline. Uses all observed RIS traffic; dashboard filters do not apply. Forecasts describe this collector stream, not the entire Internet.</p>
+   {(error||data?.error)&&<div className="notice" role="status">{error||data?.error}</div>}
+-  {!report&&<div className="forecast-warmup"><strong>{data?`${data.eligible_examples} / ${data.minimum_examples} eligible training windows`:'Connecting to forecast history…'}</strong><p>{data?.status==='training'?'Training both models in a separate worker…':'Collecting genuine history before reporting model performance. A fresh start needs about 3 hours 6 minutes of continuous valid observations.'}</p>{data&&<><progress aria-label="Training history collected" max={data.minimum_examples} value={Math.min(data.eligible_examples,data.minimum_examples)}/><p>{data.valid_minutes} complete minutes · {data.excluded_minutes} incomplete minutes excluded. Upstream outages and startup partial minutes are excluded; connected quiet minutes can be zero.</p></>}</div>}
+-  {report&&<><div className="forecast-summary"><strong>{report.insight}</strong><p>{report.train_samples} training windows · {report.test_samples} later holdout windows · one-minute embargo · fixed settings · no shuffled split.</p><p>Holdout: {date(report.test_start)} – {date(report.test_end)} (local). Errors are UPDATE counts per 60-second window; lower is better. Latency is measured batch inference time per row.</p>{data?.status==='training'&&<p>Refreshing models; showing the last completed evaluation.</p>}</div>
++  {!report&&<div className="forecast-warmup"><strong>{data?`${data.eligible_examples} / ${data.minimum_examples} eligible training windows`:'Connecting to forecast history…'}</strong><p>{data?.status==='training'?'Training both models in a separate worker…':'Learning from arriving traffic. First comparison takes about 65–70 seconds from a fresh connection, then refreshes as new observations arrive.'}</p>{data&&<><progress aria-label="Training history collected" max={data.minimum_examples} value={Math.min(data.eligible_examples,data.minimum_examples)}/><p>{data.valid_windows} complete 5-second windows · {data.excluded_windows} incomplete 5-second windows excluded. Upstream outages and startup partial windows are excluded; connected quiet windows can be zero.</p></>}</div>}
++  {report&&<><div className="forecast-summary"><strong>{report.insight}</strong>{report.preliminary&&<p role="status">PRELIMINARY · Learning from a small live sample. These early errors are not validated accuracy; rankings may change quickly.</p>}<p>{report.train_samples} training windows · {report.test_samples} later holdout windows · 5-second embargo · fixed settings · no shuffled split.</p><p>Holdout: {date(report.test_start)} – {date(report.test_end)} (local). Errors are UPDATE counts per 5-second window; lower is better. Latency is measured batch inference time per row.</p>{data?.status==='training'&&<p>Refreshing models; showing the last completed evaluation.</p>}</div>
+    <div className="forecast-table-scroll"><table className="forecast-table"><thead><tr><th>Model</th><th>Holdout MAE</th><th>Holdout RMSE</th><th>Train time</th><th>Inference / row</th><th>Model size</th></tr></thead><tbody>{keys.map(key=>{const score=report.scores[key];return <tr key={key}><th scope="row">{names[key]}</th><td>{num.format(score.mae)}</td><td>{num.format(score.rmse)}</td><td>{key==='baseline'?'—':`${score.train_seconds.toFixed(2)} s`}</td><td>{key==='baseline'?'—':`${score.inference_ms_per_row.toFixed(3)} ms`}</td><td>{key==='baseline'?'—':`${(score.model_bytes/1024).toFixed(1)} KiB`}</td></tr>})}</tbody></table></div>
+    <p className="forecast-note">Evaluation recorded {date(report.created_at)}. Live models are then refit on all {report.samples} available past windows. A single holdout cannot establish reliability across routing regimes. <a href="/api/forecast/report" target="_blank" rel="noreferrer">Open reproducible evaluation JSON</a></p>
+   </>}
+-  {latest&&<div className="forecast-live"><strong>{latest.target_end>Date.now()/1000?'Current forecast':'Most recent forecast'} · {date(latest.origin)} – {new Date(latest.target_end*1000).toLocaleTimeString()}</strong><p>Generated {date(latest.generated_at)} · forecast version {latest.version}. {latest.outcome==='pending'?'Actual count pending target completion.':latest.outcome==='observed'?`Observed: ${num.format(latest.actual!)} UPDATEs.`:'Target minute excluded because capture was incomplete.'}</p><div className="forecast-values">{keys.map(key=><span key={key}><small>{names[key]}</small><b>{num.format(latest.predictions[key])}</b><small>UPDATEs / minute</small></span>)}</div>{Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting)>0&&<p>Model disagreement: {num.format(Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting))} UPDATEs. This is not a confidence interval.</p>}</div>}
+-  {data?.prospective.scores&&<p className="forecast-note">Prospective MAE over {data.prospective.samples} completed forecasts from the current model version: {keys.map(key=>`${names[key]} ${num.format(data.prospective.scores![key].mae)}`).join(' · ')}. These forecasts were stored before their target minutes completed.</p>}
++  {latest&&<div className="forecast-live"><strong>{latest.target_end>Date.now()/1000?'Current forecast':'Most recent forecast'} · {date(latest.origin)} – {new Date(latest.target_end*1000).toLocaleTimeString()}</strong><p>Generated {date(latest.generated_at)} · forecast version {latest.version}. {latest.outcome==='pending'?'Actual count pending target completion.':latest.outcome==='observed'?`Observed: ${num.format(latest.actual!)} UPDATEs.`:'Target window excluded because capture was incomplete.'}</p><div className="forecast-values">{keys.map(key=><span key={key}><small>{names[key]}</small><b>{num.format(latest.predictions[key])}</b><small>UPDATEs / 5 seconds</small></span>)}</div>{Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting)>0&&<p>Model disagreement: {num.format(Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting))} UPDATEs. This is not a confidence interval.</p>}</div>}
++  {data?.prospective.scores&&<p className="forecast-note">Prospective MAE over {data.prospective.samples} completed forecasts from the current model version: {keys.map(key=>`${names[key]} ${num.format(data.prospective.scores![key].mae)}`).join(' · ')}. These forecasts were stored before their target windows completed.</p>}
+  </section>
+ });

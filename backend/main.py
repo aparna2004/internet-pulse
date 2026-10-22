@@ -2,12 +2,18 @@ import asyncio
 import json
 import logging
 import math
+import socket
 import time
+from pathlib import Path as FilePath
+from fastapi.staticfiles import StaticFiles
 from collections import Counter, deque, OrderedDict
 import ipaddress
 from contextlib import asynccontextmanager, suppress
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Path
+from backend.asn_metadata import ASNResolver
+from backend.forecast_service import ForecastService
+from fastapi.responses import JSONResponse
 from websockets.asyncio.client import connect
 
 log = logging.getLogger("internet-pulse")
@@ -230,7 +236,9 @@ class Pulse:
                     events=[e for e in self.events if e["received_at"] > now-window][:50], topology=dict(nodes=[dict(id=a, updates=asns[int(a)], connections=degree[a], last_seen=node_seen.get(int(a), now-window)) for a in nodes], links=links))
 
 
+asn_resolver = ASNResolver()
 pulse = Pulse()
+forecast_service = ForecastService(pulse)
 views = {}  # At most four additional live filter aggregates; no raw firehose retention.
 
 
@@ -253,7 +261,7 @@ async def ingest_loop():
     delay = 1
     while True:
         try:
-            async with connect(RIS_URL, max_size=2**20, max_queue=32, ping_interval=20, ping_timeout=20) as ws:
+            async with connect(RIS_URL, family=socket.AF_INET, max_size=2**20, max_queue=32, ping_interval=20, ping_timeout=20) as ws:
                 await ws.send(json.dumps(dict(type="ris_subscribe", data=dict(type="UPDATE", socketOptions=dict(acknowledge=True)))))
                 processed = 0
                 async for raw in ws:
@@ -292,10 +300,15 @@ async def ingest_loop():
 @asynccontextmanager
 async def lifespan(app):
     task = asyncio.create_task(ingest_loop())
-    yield
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task
+    metadata_task = asyncio.create_task(asn_resolver.run())
+    forecast_task = asyncio.create_task(forecast_service.run())
+    try:
+        yield
+    finally:
+        task.cancel()
+        metadata_task.cancel()
+        forecast_task.cancel()
+        await asyncio.gather(task, metadata_task, forecast_task, return_exceptions=True)
 
 
 app = FastAPI(title="Internet Pulse", lifespan=lifespan)
@@ -305,6 +318,25 @@ app = FastAPI(title="Internet Pulse", lifespan=lifespan)
 async def health():
     return dict(service="ok", ris_connected=pulse.connected, total_received=pulse.total,
                 last_received=pulse.last_received, error=pulse.error)
+
+
+@app.get("/api/forecast")
+async def forecast_status():
+    return forecast_service.state
+
+
+@app.get("/api/forecast/report")
+async def forecast_report():
+    if forecast_service.report is None:
+        return JSONResponse(status_code=409, content={"status": "collecting", "message": "No completed evaluation yet"})
+    return forecast_service.report
+
+
+@app.get("/api/asn/{asn}")
+async def asn_metadata(asn: int = Path(ge=0, le=4294967295)):
+    holder = asn_resolver.lookup(asn)
+    return dict(asn=asn, organization=holder, source="RIPEstat AS Overview",
+                retry_after=2 if asn in asn_resolver.pending else 300)
 
 
 @app.websocket("/ws")
@@ -351,8 +383,14 @@ async def stream(ws: WebSocket):
                             last_received=pulse.last_received, global_total=pulse.total,
                             filters=dict(collector=collector, asn=asn, prefix=prefix),
                             available_collectors=sorted({c for b in pulse.buckets for c in b["collectors"]}))
-            await asyncio.wait_for(ws.send_json(snapshot), timeout=5)
+            await asyncio.wait_for(ws.send_json(asn_resolver.enrich(snapshot)), timeout=5)
             await asyncio.sleep(1)
     except (WebSocketDisconnect, RuntimeError, OSError, asyncio.TimeoutError):
         with suppress(Exception):
             await ws.close()
+
+
+# Mount last so API and WebSocket routes keep their normal behavior.
+frontend_dist = FilePath(__file__).resolve().parents[1] / 'frontend' / 'dist'
+if frontend_dist.is_dir():
+    app.mount('/', StaticFiles(directory=frontend_dist, html=True), name='dashboard')

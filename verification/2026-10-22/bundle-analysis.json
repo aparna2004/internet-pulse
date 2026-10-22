@@ -1,0 +1,331 @@
+{
+  "note": "Rollup renderedLength before final minification; attribution estimate, not compressed transfer size.",
+  "packages": [
+    [
+      "react-dom",
+      653769
+    ],
+    [
+      "recharts",
+      497613
+    ],
+    [
+      "motion-dom",
+      294383
+    ],
+    [
+      "lodash",
+      191335
+    ],
+    [
+      "framer-motion",
+      111996
+    ],
+    [
+      "application",
+      57600
+    ],
+    [
+      "force-graph",
+      50601
+    ],
+    [
+      "bezier-js",
+      49801
+    ],
+    [
+      "decimal.js-light",
+      49721
+    ],
+    [
+      "react-smooth",
+      38620
+    ],
+    [
+      "@tweenjs/tween.js",
+      35818
+    ],
+    [
+      "tinycolor2",
+      34984
+    ],
+    [
+      "d3-scale",
+      28726
+    ],
+    [
+      "fast-equals",
+      26791
+    ],
+    [
+      "d3-selection",
+      25766
+    ],
+    [
+      "d3-shape",
+      24504
+    ],
+    [
+      "d3-transition",
+      24401
+    ],
+    [
+      "react",
+      21175
+    ],
+    [
+      "d3-time-format",
+      19138
+    ],
+    [
+      "d3-zoom",
+      17230
+    ],
+    [
+      "recharts-scale",
+      16702
+    ],
+    [
+      "d3-force-3d",
+      16456
+    ],
+    [
+      "lodash-es",
+      15807
+    ],
+    [
+      "d3-octree",
+      14940
+    ],
+    [
+      "d3-format",
+      11837
+    ],
+    [
+      "scheduler",
+      11420
+    ],
+    [
+      "d3-color",
+      11293
+    ],
+    [
+      "d3-quadtree",
+      11081
+    ],
+    [
+      "preact",
+      10848
+    ],
+    [
+      "d3-time",
+      10613
+    ],
+    [
+      "eventemitter3",
+      10065
+    ],
+    [
+      "d3-interpolate",
+      10056
+    ],
+    [
+      "d3-binarytree",
+      8734
+    ],
+    [
+      "float-tooltip",
+      8732
+    ],
+    [
+      "lucide-react",
+      8502
+    ],
+    [
+      "d3-array",
+      8309
+    ],
+    [
+      "d3-drag",
+      7484
+    ],
+    [
+      "motion-utils",
+      7418
+    ],
+    [
+      "kapsule",
+      6586
+    ],
+    [
+      "react-force-graph-2d",
+      6378
+    ],
+    [
+      "index-array-by",
+      6068
+    ],
+    [
+      "canvas-color-tracker",
+      5490
+    ],
+    [
+      "d3-path",
+      4379
+    ],
+    [
+      "jerrypick",
+      3678
+    ],
+    [
+      "react-is",
+      3234
+    ],
+    [
+      "d3-timer",
+      3098
+    ],
+    [
+      "prop-types",
+      2921
+    ],
+    [
+      "react-kapsule",
+      2899
+    ],
+    [
+      "d3-dispatch",
+      2726
+    ],
+    [
+      "internmap",
+      1111
+    ],
+    [
+      "clsx",
+      368
+    ],
+    [
+      "d3-scale-chromatic",
+      284
+    ],
+    [
+      "accessor-fn",
+      213
+    ],
+    [
+      "tiny-invariant",
+      112
+    ],
+    [
+      "d3-ease",
+      91
+    ],
+    [
+      "victory-vendor",
+      0
+    ]
+  ],
+  "largestModules": [
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/react-dom@19.3.0_react@19.3.0/node_modules/react-dom/cjs/react-dom-client.production.js",
+      "bytes": 644593
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/chart/generateCategoricalChart.js",
+      "bytes": 80845
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/motion-dom@12.43.0/node_modules/motion-dom/dist/es/projection/node/create-projection-node.mjs",
+      "bytes": 72062
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/force-graph@1.52.0/node_modules/force-graph/dist/force-graph.mjs",
+      "bytes": 50601
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/decimal.js-light@2.5.1/node_modules/decimal.js-light/decimal.mjs",
+      "bytes": 49721
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/util/ChartUtils.js",
+      "bytes": 39882
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/@tweenjs+tween.js@25.0.0/node_modules/@tweenjs/tween.js/dist/tween.esm.js",
+      "bytes": 35818
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/tinycolor2@1.6.0/node_modules/tinycolor2/esm/tinycolor.js",
+      "bytes": 34984
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/src/App.tsx",
+      "bytes": 30946
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/fast-equals@5.4.3/node_modules/fast-equals/dist/es/index.mjs",
+      "bytes": 26791
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/bezier-js@6.1.4/node_modules/bezier-js/src/bezier.js",
+      "bytes": 25380
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/cartesian/Brush.js",
+      "bytes": 25107
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/framer-motion@12.43.0_react_ee24cfdb2ea2823200be165070d2c473/node_modules/framer-motion/dist/es/gestures/drag/VisualElementDragControls.mjs",
+      "bytes": 24020
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/bezier-js@6.1.4/node_modules/bezier-js/src/utils.js",
+      "bytes": 23286
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/cartesian/Bar.js",
+      "bytes": 20944
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/react@19.3.0/node_modules/react/cjs/react.production.js",
+      "bytes": 19185
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/d3-time-format@4.1.0/node_modules/d3-time-format/src/locale.js",
+      "bytes": 18405
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/react-smooth@4.0.4_react-do_e50b90a8750985f871559341e42c8753/node_modules/react-smooth/es6/Animate.js",
+      "bytes": 18173
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/component/Label.js",
+      "bytes": 17608
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/motion-dom@12.43.0/node_modules/motion-dom/dist/es/render/utils/animation-state.mjs",
+      "bytes": 16831
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/cartesian/CartesianAxis.js",
+      "bytes": 16767
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/recharts@2.15.4_react-dom@19.3.0_react@19.3.0__react@19.3.0/node_modules/recharts/es6/cartesian/CartesianGrid.js",
+      "bytes": 16108
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/src/Topology.tsx",
+      "bytes": 15272
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/d3-zoom@3.0.0/node_modules/d3-zoom/src/zoom.js",
+      "bytes": 15246
+    },
+    {
+      "id": "C:/Users/hp/Documents/ChatGPT/Internet Pulse 3/frontend/node_modules/.pnpm/framer-motion@12.43.0_react_ee24cfdb2ea2823200be165070d2c473/node_modules/framer-motion/dist/es/animation/sequence/create.mjs",
+      "bytes": 13575
+    }
+  ]
+}

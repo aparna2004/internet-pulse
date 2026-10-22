@@ -1,0 +1,26 @@
+{
+  "duration_seconds": 75.5,
+  "snapshots": 73,
+  "received_updates": 304368,
+  "gap_median_seconds": 1.0469999999913853,
+  "gap_max_seconds": 1.1089999999967404,
+  "forecast_api_median_ms": 22.16135000344366,
+  "forecast_api_max_ms": 34.591799980262294,
+  "errors": [],
+  "forecast_state": {
+    "status": "collecting",
+    "error": null,
+    "scope": "Global observed stream; dashboard filters do not apply",
+    "eligible_examples": 2,
+    "minimum_examples": 180,
+    "valid_minutes": 7,
+    "excluded_minutes": 2,
+    "report": null,
+    "forecasts": [],
+    "prospective": {
+      "samples": 0,
+      "scores": null
+    },
+    "updated_at": 1792646697.859286
+  }
+}

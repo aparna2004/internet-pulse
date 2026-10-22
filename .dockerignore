@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+.pnpm-store
+**/node_modules
+**/__pycache__
+**/*.pyc
+**/*.tsbuildinfo
+frontend/dist
+data
+verification
+*.log
+.env
+.env.*

@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: internet-pulse
+    runtime: docker
+    plan: free
+    numInstances: 1
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: PULSE_DATA_DIR
+        value: /app/data
