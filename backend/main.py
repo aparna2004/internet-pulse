@@ -46,6 +46,7 @@ class Pulse:
         self.cache_second = -1
         self.limited = False
         self.connected = False
+        self.connection_epoch = 0
         self.last_received = None
         self.total = 0
         self.malformed = 0
@@ -293,6 +294,7 @@ async def ingest_loop():
             log.warning("RIS disconnected: %s; retry in %ss", pulse.error, delay)
         finally:
             pulse.connected = False
+            pulse.connection_epoch += 1
         await asyncio.sleep(delay)
         delay = min(delay * 2, 30)
 

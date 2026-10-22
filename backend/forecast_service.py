@@ -112,8 +112,9 @@ class ForecastService:
             while True:
                 try:
                     now = time.time()
-                    row = self.sampler.sample(now, self.pulse.connected, self.pulse.buckets)
-                    if row:
+                    completed_rows = self.sampler.sample_many(now, self.pulse.connected, self.pulse.buckets,
+                                                            getattr(self.pulse, 'connection_epoch', 0))
+                    for row in completed_rows:
                         await asyncio.to_thread(self.store.save_window, row)
                         await self.reload()
                         if self.error and self.error.startswith('Forecast history'):

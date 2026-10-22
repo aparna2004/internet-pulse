@@ -54,7 +54,7 @@ class WindowSampler:
     """Copies completed scalar buckets; never called on the per-event ingest path.
 
     Both ends of each one-second interval must observe an upstream connection.
-    A missed sampling interval invalidates the window rather than guessing zeros.
+    Unrecoverable gaps invalidate windows; sample_many can recover bounded scheduler lag.
     """
     def __init__(self):
         self.previous_second = None
@@ -63,6 +63,37 @@ class WindowSampler:
         self.seconds = 0
         self.row = None
         self.collectors = set()
+
+    def sample_many(self, now, connected, buckets, connection_epoch=0):
+        """Recover <=10 s scheduler lag from real buckets, never an upstream outage.
+
+        The ingest loop advances connection_epoch on every disconnect, including
+        one that happens entirely between sampler polls. First/reconnected partial
+        seconds are excluded. Missing buckets are quiet zeros only while the same
+        upstream connection has stayed open throughout the recovered interval.
+        """
+        second = int(now)
+        previous_epoch = getattr(self, '_observed_epoch', None)
+        previous_connection = getattr(self, '_observed_connected', False)
+        changed = previous_epoch is not None and previous_epoch != connection_epoch
+        if changed or (connected and not previous_connection):
+            self._unsafe_before = second + 1
+        previous = self.previous_second
+        recover = (previous is not None and 1 < second-previous <= 10 and
+                   connected and previous_connection and not changed)
+        if changed:
+            self.previous_connected = False
+        steps = range(previous+1, second+1) if recover else [second]
+        rows = []
+        for step in steps:
+            if step-1 < getattr(self, '_unsafe_before', 0):
+                self.previous_connected = False
+            row = self.sample(now if step == second else step, connected, buckets)
+            if row is not None:
+                rows.append(row)
+        self._observed_epoch = connection_epoch
+        self._observed_connected = connected
+        return rows
 
     def sample(self, now, connected, buckets):
         second = int(now)

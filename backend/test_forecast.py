@@ -52,6 +52,34 @@ class FeatureTests(unittest.TestCase):
 
 
 class SamplerTests(unittest.TestCase):
+    def test_scheduler_lag_recovers_real_completed_buckets(self):
+        sampler = WindowSampler()
+        buckets = [dict(second=s, updates=7, announcements=10, withdrawals=2,
+                        path_sum=28, path_count=7, flaps=1, collectors={'rrc00':7}) for s in range(10, 15)]
+        sampler.sample_many(5, True, [], 0)
+        sampler.sample_many(6, True, [], 0)
+        sampler.sample_many(10, True, buckets, 0)
+        result = sampler.sample_many(15, True, buckets, 0)
+        self.assertTrue(result[-1]['valid'])
+        self.assertEqual(result[-1]['updates'], 35)
+        self.assertEqual(result[-1]['collectors'], 1)
+
+    def test_disconnect_between_polls_and_partial_first_second_are_excluded(self):
+        sampler = WindowSampler()
+        sampler.sample_many(5.4, True, [], 0)
+        partial = sampler.sample_many(10, True, [], 0)
+        self.assertFalse(partial[-1]['valid'])
+        sampler.sample_many(11, True, [], 0)
+        interrupted = sampler.sample_many(15, True, [], 1)
+        self.assertFalse(interrupted[-1]['valid'])
+
+    def test_recovery_is_bounded_and_never_fills_long_gaps(self):
+        sampler = WindowSampler()
+        sampler.sample_many(5, True, [], 0)
+        row = sampler.sample_many(30, True, [], 0)
+        self.assertEqual(len(row), 1)
+        self.assertFalse(row[0]['valid'])
+
     def test_connected_quiet_complete_window_is_valid_zero(self):
         sampler = WindowSampler()
         sampler.sample(5, True, [])
