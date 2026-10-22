@@ -29,5 +29,6 @@ jobs:
       - run: pnpm --dir frontend install --frozen-lockfile
       - run: pnpm --dir frontend run build
       - run: node frontend/tests/connection-state.cjs
+      - run: node frontend/tests/forecast-experiment.cjs
       - name: Verify production container builds
         run: docker build --tag internet-pulse:verify .

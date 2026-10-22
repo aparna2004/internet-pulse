@@ -75,6 +75,9 @@ def train(samples):
         insight = (f'{best.replace("_", " ")} has the lowest holdout MAE, '
                    f'{gain:,.1f} UPDATEs{relative} lower than the baseline.')
     return dict(created_at=int(time.time()), version=_version, dataset_sha256=fingerprint(samples),
+                data_source='RIPE RIS Live', aggregation='Receipt-time aligned five-second windows',
+                feature_history_windows=5, dataset_start=samples[0]['origin']-5*INTERVAL,
+                dataset_end=samples[-1]['origin']+INTERVAL,
                 target='RIPE RIS Live observed UPDATE count in the next aligned five-second window', horizon_seconds=INTERVAL,
                 preliminary=len(samples) < 180,
                 scope='Global observed stream; dashboard filters do not apply', feature_names=FEATURES,

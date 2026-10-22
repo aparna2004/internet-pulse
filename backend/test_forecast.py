@@ -142,6 +142,20 @@ class StoreTests(unittest.TestCase):
             store.save_window(row)
             self.assertEqual(store.read()[0][0]['updates'], 100)
 
+    def test_published_history_is_bounded_and_capture_quality_is_explicit(self):
+        service = ForecastService(SimpleNamespace(connected=False, buckets=[]), ':unused:')
+        service.rows = fixture_rows(10)
+        service.rows[3]['valid'] = False
+        service.predictions = [dict(origin=i*INTERVAL, version='old', outcome='pending') for i in reversed(range(100))]
+        service.publish()
+        self.assertEqual(len(service.state['forecasts']), 6)
+        self.assertEqual(len(service.state['forecast_history']), 60)
+        self.assertEqual(service.state['forecast_history'][0]['origin'], 99*INTERVAL)
+        self.assertEqual(service.state['capture'], dict(first_window=0, last_window_end=50,
+                         captured_windows=10, valid_windows=9, excluded_windows=1))
+        self.assertEqual(service.state['prospective'], dict(samples=0, scores=None))
+        self.assertEqual(service.state['valid_windows'], 9)
+
     def test_cold_start_has_no_report_or_scores(self):
         service = ForecastService(SimpleNamespace(connected=False, buckets=[]), ':unused:')
         self.assertEqual(service.state['status'], 'collecting')
@@ -159,6 +173,10 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(report['test_samples'], 3)
         self.assertTrue(report['preliminary'])
         self.assertEqual(report['horizon_seconds'], 5)
+        self.assertEqual(report['data_source'], 'RIPE RIS Live')
+        self.assertEqual(report['feature_history_windows'], 5)
+        self.assertEqual(report['dataset_start'], samples[0]['origin']-25)
+        self.assertEqual(report['dataset_end'], samples[-1]['origin']+5)
         self.assertEqual(report['embargo_seconds'], 5)
         json.dumps(report, allow_nan=False)
 

@@ -157,3 +157,11 @@ For a future online-learning comparison, River's online linear regression and Ho
 ## Deploy from GitHub
 
 See [DEPLOYMENT.md](DEPLOYMENT.md) for the one-service Render deployment, GitHub checks, and Free-tier versus persistent-storage behavior.
+
+## Forecast visualization and experiment exports
+
+The existing forecast comparison panel includes **Actual vs predicted**: up to 60 aligned five-second slots (five minutes), with observed UPDATE counts, Random Forest, Histogram Gradient Boosting and the repeat-previous-window baseline. Inspect with the pointer or chart arrow keys for target times, counts and model version. Missing forecasts break lines; pending/excluded actuals remain blank, while real observed zeros remain zero. Successive model versions can appear in the history; the holdout comparison describes the latest evaluation.
+
+After an evaluation is available, **Download experiment report** saves self-contained HTML (open it and use Print / Save as PDF). **Download JSON snapshot** preserves full numeric precision. Both freeze the evaluation, data provenance, capture quality, temporal split, features, estimator parameters, runtime versions, dataset hash, current-version prospective results and up to 60 recent issued forecasts. The HTML lists the latest 30 forecast records for readability. Reports are experimental evidence, not proof of generalization; exact retraining additionally requires the original aggregate dataset.
+
+Additional isolated frontend regression checks: node frontend/tests/forecast-experiment.cjs. No new dependencies or routing computations were introduced.

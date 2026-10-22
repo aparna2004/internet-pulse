@@ -1,12 +1,15 @@
 import {memo,useEffect,useState} from 'react';
 
-type Score={mae:number;rmse:number;train_seconds:number;inference_ms_per_row:number;model_bytes:number};
-type ModelKey='random_forest'|'hist_gradient_boosting'|'baseline';
-type Report={version:string;samples:number;train_samples:number;test_samples:number;train_start:number;train_end:number;test_start:number;test_end:number;created_at:number;preliminary:boolean;scores:Record<ModelKey,Score>;insight:string};
-type Forecast={origin:number;target_end:number;generated_at:number;version:string;predictions:Record<ModelKey,number>;actual:number|null;outcome:string};
-type State={status:string;error:string|null;eligible_examples:number;minimum_examples:number;valid_windows:number;excluded_windows:number;report:Report|null;forecasts:Forecast[];prospective:{samples:number;scores:Record<ModelKey,Score>|null}};
-const names:Record<ModelKey,string>={random_forest:'Random Forest',hist_gradient_boosting:'Histogram Gradient Boosting',baseline:'Repeat previous 5 seconds'};
-const keys=Object.keys(names) as ModelKey[];
+import ForecastHistory from './ForecastHistory';
+import {modelNames as names,modelKeys as keys,buildExperimentSnapshot,renderExperimentHTML,type ForecastState as State} from './forecastExperiment';
+
+function saveExperiment(data:State,format:'html'|'json'){
+ const snapshot=buildExperimentSnapshot(data);
+ const blob=new Blob([format==='html'?renderExperimentHTML(snapshot):JSON.stringify(snapshot,null,2)],{type:format==='html'?'text/html;charset=utf-8':'application/json;charset=utf-8'});
+ const url=URL.createObjectURL(blob),link=document.createElement('a');
+ link.href=url;link.download='internet-pulse-experiment-'+snapshot.evaluation.version+'.'+format;
+ link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
 const num=new Intl.NumberFormat(undefined,{maximumFractionDigits:0});
 const date=(v:number)=>new Date(v*1000).toLocaleString();
 
@@ -25,7 +28,9 @@ export default memo(function ForecastComparison(){
   {report&&<><div className="forecast-summary"><strong>{report.insight}</strong>{report.preliminary&&<p role="status">PRELIMINARY · Learning from a small live sample. These early errors are not validated accuracy; rankings may change quickly.</p>}<p>{report.train_samples} training windows · {report.test_samples} later holdout windows · 5-second embargo · fixed settings · no shuffled split.</p><p>Holdout: {date(report.test_start)} – {date(report.test_end)} (local). Errors are UPDATE counts per 5-second window; lower is better. Latency is measured batch inference time per row.</p>{data?.status==='training'&&<p>Refreshing models; showing the last completed evaluation.</p>}</div>
    <div className="forecast-table-scroll"><table className="forecast-table"><thead><tr><th>Model</th><th>Holdout MAE</th><th>Holdout RMSE</th><th>Train time</th><th>Inference / row</th><th>Model size</th></tr></thead><tbody>{keys.map(key=>{const score=report.scores[key];return <tr key={key}><th scope="row">{names[key]}</th><td>{num.format(score.mae)}</td><td>{num.format(score.rmse)}</td><td>{key==='baseline'?'—':`${score.train_seconds.toFixed(2)} s`}</td><td>{key==='baseline'?'—':`${score.inference_ms_per_row.toFixed(3)} ms`}</td><td>{key==='baseline'?'—':`${(score.model_bytes/1024).toFixed(1)} KiB`}</td></tr>})}</tbody></table></div>
    <p className="forecast-note">Evaluation recorded {date(report.created_at)}. Live models are then refit on all {report.samples} available past windows. A single holdout cannot establish reliability across routing regimes. <a href="/api/forecast/report" target="_blank" rel="noreferrer">Open reproducible evaluation JSON</a></p>
+   <div className="forecast-report-actions"><button onClick={()=>saveExperiment(data!,'html')}>Download experiment report</button><button onClick={()=>saveExperiment(data!,'json')}>Download JSON snapshot</button><span>Self-contained HTML · open and print to PDF · captured results, features and settings</span></div>
   </>}
+  {data&&<ForecastHistory forecasts={data.forecast_history??data.forecasts} horizon={data.horizon_seconds??5}/>}
   {latest&&<div className="forecast-live"><strong>{latest.target_end>Date.now()/1000?'Current forecast':'Most recent forecast'} · {date(latest.origin)} – {new Date(latest.target_end*1000).toLocaleTimeString()}</strong><p>Generated {date(latest.generated_at)} · forecast version {latest.version}. {latest.outcome==='pending'?'Actual count pending target completion.':latest.outcome==='observed'?`Observed: ${num.format(latest.actual!)} UPDATEs.`:'Target window excluded because capture was incomplete.'}</p><div className="forecast-values">{keys.map(key=><span key={key}><small>{names[key]}</small><b>{num.format(latest.predictions[key])}</b><small>UPDATEs / 5 seconds</small></span>)}</div>{Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting)>0&&<p>Model disagreement: {num.format(Math.abs(latest.predictions.random_forest-latest.predictions.hist_gradient_boosting))} UPDATEs. This is not a confidence interval.</p>}</div>}
   {data?.prospective.scores&&<p className="forecast-note">Prospective MAE over {data.prospective.samples} completed forecasts from the current model version: {keys.map(key=>`${names[key]} ${num.format(data.prospective.scores![key].mae)}`).join(' · ')}. These forecasts were stored before their target windows completed.</p>}
  </section>

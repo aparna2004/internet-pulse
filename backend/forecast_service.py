@@ -45,6 +45,12 @@ class ForecastService:
                           valid_windows=sum(bool(r['valid']) for r in self.rows),
                           excluded_windows=sum(not r['valid'] for r in self.rows),
                           report=self.report, forecasts=self.predictions[:6],
+                          forecast_history=self.predictions[:60],
+                          capture=dict(first_window=self.rows[0]['window'] if self.rows else None,
+                                       last_window_end=self.rows[-1]['window']+INTERVAL if self.rows else None,
+                                       captured_windows=len(self.rows),
+                                       valid_windows=sum(bool(r['valid']) for r in self.rows),
+                                       excluded_windows=sum(not r['valid'] for r in self.rows)),
                           prospective=dict(samples=len(matched), scores=prospective),
                           horizon_seconds=INTERVAL, updated_at=time.time())
 

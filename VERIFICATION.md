@@ -290,3 +290,27 @@ Commit 655ca26 was pushed to private GitHub repository `aparna2004/internet-puls
 The first cloud test passed real WSS delivery but failed to produce a model report within its two-minute evaluation wait. The free shared CPU delayed sampling and the original strict per-second polling rule excluded too many windows despite a healthy upstream connection. Corrected this reproducible issue by recovering at most ten seconds from retained actual per-second aggregates, guarded by an upstream connection epoch that advances on every ingest-loop disconnect. First/reconnected partial seconds and long/missing gaps remain excluded. There is no raw-event model work and no fabricated routing data. This adds a disconnect counter only; BGP parsing, metric definitions and existing dashboard filters are unchanged.
 
 All **29 backend tests PASS** (6.467 s), including new tests for exact real-bucket count recovery, a disconnect entirely between polls, conservative startup partials and bounded long-gap exclusion. The existing 26 tests remain passing. The change affects backend history sampling only; the already passing frontend build and connection checks are unchanged. Final public evaluation verification is performed after the corrected commit deploys; this paragraph does not claim that the initial model-availability failure passed.
+
+## 2026-10-22 — Actual-versus-predicted chart and experiment export (local)
+
+Scope: extend the existing forecasting panel only; no BGP processing, model calculations, estimator settings, dashboard filters or deployment changes. The API adds bounded forecast_history (60 records) and capture summary; newly trained evaluations record source, aggregation and exact dataset extent. The existing six-record forecasts field remains unchanged.
+
+| Check | Result |
+|---|---|
+| Backend unittest discovery | PASS: 30 tests, including bounded history/capture quality and model provenance |
+| TypeScript tsc -b | PASS |
+| Production Vite build | PASS: JS 989.78 kB / 300.51 kB gzip; CSS 39.21 kB / 9.33 kB gzip |
+| Forecast experiment utility tests | PASS: six scenarios covering alignment/gaps/zeros, bounds/deduplication, immutable snapshots, precision/provenance, legacy API fallback, HTML escaping and truthful unobserved states |
+| Existing connection-state tests | PASS: eight assertions/scenarios |
+| Actual chart inspection | PASS on real locally captured stream; chart arrow key inspection showed target interval, all four counts, outcome and model version |
+| Real JSON download | PASS: parsed downloaded file; 60 issued records, 16 features, RIPE RIS Live provenance, 4,171 eligible samples in the captured evaluation, estimator settings and dataset extent |
+| Real HTML download | PASS: opened actual downloaded artifact in browser; all report sections rendered, no active scripts, explicit pending/excluded states and baseline benchmark omissions |
+| Desktop / tablet / mobile | PASS for new chart/export controls at 1280, 768 and 390 px; document widths 1276 / 764 / 386 px respectively; no page overflow, readable wrapped buttons and legend |
+| Browser console | PASS: no warnings/errors captured on production preview or standalone report |
+| GitHub / Render | Not changed; this feature remains local and uncommitted |
+
+The report and JSON are independent frozen snapshots taken at their respective download clicks; live retraining can produce different versions between clicks. The report keeps holdout scores separate from current-version prospective scores and explicitly records absent outcomes. Real gaps were visible in the chart and were not interpolated. Existing Recharts is reused, with at most 60 chart slots, five-second polling, memoized preparation and animation disabled.
+
+Limitations: this pass did not repeat the earlier sustained soak or verify a cloud deployment, and browser print/PDF pagination was not exercised. The build retains the existing large-chunk advisory; no new dependencies were added. This is a single temporal evaluation, not cross-regime validation. Free-host restarts can lose local capture history. Exact retraining requires retaining the original aggregate dataset in addition to the exported report.
+
+Changed source/configuration files: backend/forecast_service.py, backend/forecast_worker.py, backend/test_forecast.py, frontend/src/ForecastComparison.tsx, frontend/src/ForecastHistory.tsx, frontend/src/forecastExperiment.ts, frontend/src/forecast.css, frontend/tests/forecast-experiment.cjs, .github/workflows/ci.yml; documentation: README.md, VERIFICATION.md. Ignored local verification artifacts: data/experiment-report.html, data/experiment-snapshot.json.
