@@ -1,0 +1,241 @@
+{
+  "updated_at": "2026-10-22T17:36:23.543754+00:00",
+  "source": "https://stat.ripe.net/data/rrc-info/data.json",
+  "documentation": "https://ris.ripe.net/docs/route-collectors/",
+  "coordinate_source": "Published rrcNN.ripe.net DNS LOC records, retrieved through DNS over HTTPS",
+  "land_source": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson",
+  "land_sha256": "9e0729ee253ca7d7a5c4ae9395fb1902264c5377c52e224d13dd85010e2835d9",
+  "land_license": "Natural Earth public domain",
+  "collectors": [
+    {
+      "name": "rrc00.ripe.net",
+      "label": "RRC00",
+      "location": "Amsterdam, NL",
+      "scope": "RIPE-NCC Multihop",
+      "multihop": true,
+      "latitude": 52.36666666666667,
+      "longitude": 4.883333333333334,
+      "coordinate_source": "DNS LOC rrc00.ripe.net"
+    },
+    {
+      "name": "rrc01.ripe.net",
+      "label": "RRC01",
+      "location": "London, GB",
+      "scope": "LINX / LONAP",
+      "multihop": false,
+      "latitude": 51.483333333333334,
+      "longitude": -0.11666666666666667,
+      "coordinate_source": "DNS LOC rrc01.ripe.net"
+    },
+    {
+      "name": "rrc03.ripe.net",
+      "label": "RRC03",
+      "location": "Amsterdam, NL",
+      "scope": "AMS-IX / NL-IX",
+      "multihop": false,
+      "latitude": 52.36666666666667,
+      "longitude": 4.883333333333334,
+      "coordinate_source": "DNS LOC rrc03.ripe.net"
+    },
+    {
+      "name": "rrc04.ripe.net",
+      "label": "RRC04",
+      "location": "Geneva, CH",
+      "scope": "CIXP",
+      "multihop": false,
+      "latitude": 46.18333333333333,
+      "longitude": 6.116666666666666,
+      "coordinate_source": "DNS LOC rrc04.ripe.net"
+    },
+    {
+      "name": "rrc05.ripe.net",
+      "label": "RRC05",
+      "location": "Vienna, AT",
+      "scope": "VIX",
+      "multihop": false,
+      "latitude": 48.18333333333333,
+      "longitude": 16.366666666666667,
+      "coordinate_source": "DNS LOC rrc05.ripe.net"
+    },
+    {
+      "name": "rrc06.ripe.net",
+      "label": "RRC06",
+      "location": "Tokyo, JP",
+      "scope": "DIX-IE / JPIX",
+      "multihop": false,
+      "latitude": 35.666666666666664,
+      "longitude": 139.76666666666668,
+      "coordinate_source": "DNS LOC rrc06.ripe.net"
+    },
+    {
+      "name": "rrc07.ripe.net",
+      "label": "RRC07",
+      "location": "Stockholm, SE",
+      "scope": "Netnod",
+      "multihop": false,
+      "latitude": 59.31666666666667,
+      "longitude": 18.083333333333332,
+      "coordinate_source": "DNS LOC rrc07.ripe.net"
+    },
+    {
+      "name": "rrc10.ripe.net",
+      "label": "RRC10",
+      "location": "Milan, IT",
+      "scope": "MIX-IT",
+      "multihop": false,
+      "latitude": 45.45,
+      "longitude": 9.183333333333334,
+      "coordinate_source": "DNS LOC rrc10.ripe.net"
+    },
+    {
+      "name": "rrc11.ripe.net",
+      "label": "RRC11",
+      "location": "New York, NY, US",
+      "scope": "NYIIX",
+      "multihop": false,
+      "latitude": 40.68333333333333,
+      "longitude": -74.0,
+      "coordinate_source": "DNS LOC rrc11.ripe.net"
+    },
+    {
+      "name": "rrc12.ripe.net",
+      "label": "RRC12",
+      "location": "Frankfurt, DE",
+      "scope": "DE-CIX",
+      "multihop": false,
+      "latitude": 50.1,
+      "longitude": 8.666666666666666,
+      "coordinate_source": "DNS LOC rrc12.ripe.net"
+    },
+    {
+      "name": "rrc13.ripe.net",
+      "label": "RRC13",
+      "location": "Moscow, RU",
+      "scope": "MSK-IX",
+      "multihop": false,
+      "latitude": 55.7,
+      "longitude": 37.65,
+      "coordinate_source": "DNS LOC rrc13.ripe.net"
+    },
+    {
+      "name": "rrc14.ripe.net",
+      "label": "RRC14",
+      "location": "Palo Alto, CA, US",
+      "scope": "Equinix Palo Alto",
+      "multihop": false,
+      "latitude": 37.43333333333333,
+      "longitude": -122.15,
+      "coordinate_source": "DNS LOC rrc14.ripe.net"
+    },
+    {
+      "name": "rrc15.ripe.net",
+      "label": "RRC15",
+      "location": "Sao Paulo, BR",
+      "scope": "IX.br Sao Paulo",
+      "multihop": false,
+      "latitude": -23.583333333333332,
+      "longitude": -46.61666666666667,
+      "coordinate_source": "DNS LOC rrc15.ripe.net"
+    },
+    {
+      "name": "rrc16.ripe.net",
+      "label": "RRC16",
+      "location": "Miami, FL, US",
+      "scope": "Equinix Miami",
+      "multihop": false,
+      "latitude": 25.733333333333334,
+      "longitude": -80.18333333333334,
+      "coordinate_source": "DNS LOC rrc16.ripe.net"
+    },
+    {
+      "name": "rrc18.ripe.net",
+      "label": "RRC18",
+      "location": "Barcelona, ES",
+      "scope": "CATNIX",
+      "multihop": false,
+      "latitude": 41.31666666666667,
+      "longitude": 2.2,
+      "coordinate_source": "DNS LOC rrc18.ripe.net"
+    },
+    {
+      "name": "rrc19.ripe.net",
+      "label": "RRC19",
+      "location": "Johannesburg, ZA",
+      "scope": "NAPAfrica JB",
+      "multihop": false,
+      "latitude": -26.233333333333334,
+      "longitude": 28.05,
+      "coordinate_source": "DNS LOC rrc19.ripe.net"
+    },
+    {
+      "name": "rrc20.ripe.net",
+      "label": "RRC20",
+      "location": "Zurich, CH",
+      "scope": "SwissIX",
+      "multihop": false,
+      "latitude": 47.36666666666667,
+      "longitude": 8.55,
+      "coordinate_source": "DNS LOC rrc20.ripe.net"
+    },
+    {
+      "name": "rrc21.ripe.net",
+      "label": "RRC21",
+      "location": "Paris, FR",
+      "scope": "France-IX Paris and Marseille",
+      "multihop": false,
+      "latitude": 48.833333333333336,
+      "longitude": 2.35,
+      "coordinate_source": "DNS LOC rrc21.ripe.net"
+    },
+    {
+      "name": "rrc22.ripe.net",
+      "label": "RRC22",
+      "location": "Bucharest, RO",
+      "scope": "InterLAN-IX",
+      "multihop": false,
+      "latitude": 42.36666666666667,
+      "longitude": 26.133333333333333,
+      "coordinate_source": "DNS LOC rrc22.ripe.net"
+    },
+    {
+      "name": "rrc23.ripe.net",
+      "label": "RRC23",
+      "location": "Singapore, SG",
+      "scope": "Equinix Singapore",
+      "multihop": false,
+      "latitude": 20.366666666666667,
+      "longitude": 103.86666666666666,
+      "coordinate_source": "DNS LOC rrc23.ripe.net"
+    },
+    {
+      "name": "rrc24.ripe.net",
+      "label": "RRC24",
+      "location": "Montevideo, UY",
+      "scope": "LACNIC Multihop",
+      "multihop": true,
+      "latitude": -34.9,
+      "longitude": -56.15,
+      "coordinate_source": "DNS LOC rrc24.ripe.net"
+    },
+    {
+      "name": "rrc25.ripe.net",
+      "label": "RRC25",
+      "location": "Amsterdam, NL",
+      "scope": "RIPE-NCC Multihop",
+      "multihop": true,
+      "latitude": 52.36666666666667,
+      "longitude": 4.883333333333334,
+      "coordinate_source": "DNS LOC rrc25.ripe.net"
+    },
+    {
+      "name": "rrc26.ripe.net",
+      "label": "RRC26",
+      "location": "Dubai, AE",
+      "scope": "UAE-IX",
+      "multihop": false,
+      "latitude": 25.2,
+      "longitude": 55.266666666666666,
+      "coordinate_source": "DNS LOC rrc26.ripe.net"
+    }
+  ]
+}

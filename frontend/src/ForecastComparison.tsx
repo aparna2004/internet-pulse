@@ -1,6 +1,7 @@
 import {memo,useEffect,useState} from 'react';
 
 import ForecastHistory from './ForecastHistory';
+import ForecastScores from './ForecastScores';
 import {modelNames as names,modelKeys as keys,buildExperimentSnapshot,renderExperimentHTML,type ForecastState as State} from './forecastExperiment';
 
 function saveExperiment(data:State,format:'html'|'json'){
@@ -26,7 +27,7 @@ export default memo(function ForecastComparison(){
   {(error||data?.error)&&<div className="notice" role="status">{error||data?.error}</div>}
   {!report&&<div className="forecast-warmup"><strong>{data?`${data.eligible_examples} / ${data.minimum_examples} eligible training windows`:'Connecting to forecast history…'}</strong><p>{data?.status==='training'?'Training both models in a separate worker…':'Learning from arriving traffic. First comparison takes about 65–70 seconds from a fresh connection, then refreshes as new observations arrive.'}</p>{data&&<><progress aria-label="Training history collected" max={data.minimum_examples} value={Math.min(data.eligible_examples,data.minimum_examples)}/><p>{data.valid_windows} complete 5-second windows · {data.excluded_windows} incomplete 5-second windows excluded. Upstream outages and startup partial windows are excluded; connected quiet windows can be zero.</p></>}</div>}
   {report&&<><div className="forecast-summary"><strong>{report.insight}</strong>{report.preliminary&&<p role="status">PRELIMINARY · Learning from a small live sample. These early errors are not validated accuracy; rankings may change quickly.</p>}<p>{report.train_samples} training windows · {report.test_samples} later holdout windows · 5-second embargo · fixed settings · no shuffled split.</p><p>Holdout: {date(report.test_start)} – {date(report.test_end)} (local). Errors are UPDATE counts per 5-second window; lower is better. Latency is measured batch inference time per row.</p>{data?.status==='training'&&<p>Refreshing models; showing the last completed evaluation.</p>}</div>
-   <div className="forecast-table-scroll"><table className="forecast-table"><thead><tr><th>Model</th><th>Holdout MAE</th><th>Holdout RMSE</th><th>Train time</th><th>Inference / row</th><th>Model size</th></tr></thead><tbody>{keys.map(key=>{const score=report.scores[key];return <tr key={key}><th scope="row">{names[key]}</th><td>{num.format(score.mae)}</td><td>{num.format(score.rmse)}</td><td>{key==='baseline'?'—':`${score.train_seconds.toFixed(2)} s`}</td><td>{key==='baseline'?'—':`${score.inference_ms_per_row.toFixed(3)} ms`}</td><td>{key==='baseline'?'—':`${(score.model_bytes/1024).toFixed(1)} KiB`}</td></tr>})}</tbody></table></div>
+   <ForecastScores report={report}/>
    <p className="forecast-note">Evaluation recorded {date(report.created_at)}. Live models are then refit on all {report.samples} available past windows. A single holdout cannot establish reliability across routing regimes. <a href="/api/forecast/report" target="_blank" rel="noreferrer">Open reproducible evaluation JSON</a></p>
    <div className="forecast-report-actions"><button onClick={()=>saveExperiment(data!,'html')}>Download experiment report</button><button onClick={()=>saveExperiment(data!,'json')}>Download JSON snapshot</button><span>Self-contained HTML · open and print to PDF · captured results, features and settings</span></div>
   </>}

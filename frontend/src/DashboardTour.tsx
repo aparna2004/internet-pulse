@@ -8,9 +8,11 @@ const steps=[
  {target:'.ranking',title:'Find busy networks',text:'This ranking counts updates containing each ASN. Organization names come from RIPEstat when available.'},
  {target:'.heartbeat-panel',title:'Follow the heartbeat',text:'Each point counts real updates in one second. Hover, tap, or use arrow keys on the chart to inspect a timestamp.'},
  {target:'.dynamics',title:'Compare route operations',text:'Green bars count announcements; amber bars count withdrawals. Hover or tap a bar to see prefix-operation counts.'},
+ {target:'.collector-map-panel',title:'Locate observation points',text:'Marker sizes show live update counts at documented RIPE collector locations. Select a collector to filter. These are observation points, not event origins or geographic routes.'},
+ {target:'#forecast-insights',title:'Compare live models',text:'Compare both models against a simple baseline. Lower forecast errors are better. Dots show real issued predictions; gaps are not invented. Download a report to retain the evaluation.'},
  {target:'.heatmap-panel',title:'Compare collectors',text:'Each row is a collector. Brighter cells mean more updates in that time bucket. The field scrolls horizontally on small screens.'},
- {target:'.events',title:'Inspect individual events',text:'Pause freezes this list while ingestion continues. The new-event count covers this scope before local search and type filters. Resume returns to recent events.'},
- {target:'.anomaly-panel',title:'Read routing observations',text:'These cards explain routing heuristics such as flaps and long paths. A signal is an observation, not proof of an attack.'},
+ {target:'.events',title:'Inspect individual events',text:'Explore collector lanes in Timeline or individual records in Table. Pause freezes this feed while ingestion continues. The new-event count covers this scope before local search and type filters. Resume returns to recent events.'},
+ {target:'.anomaly-panel',title:'Inspect routing signals',text:'Counts summarize retained rule-based signals, separately from the trained models. Expand explanations, then a signal type, to inspect the records. A signal does not prove an outage or attack.'},
 ];
 
 export default function DashboardTour(){

@@ -314,3 +314,57 @@ The report and JSON are independent frozen snapshots taken at their respective d
 Limitations: this pass did not repeat the earlier sustained soak or verify a cloud deployment, and browser print/PDF pagination was not exercised. The build retains the existing large-chunk advisory; no new dependencies were added. This is a single temporal evaluation, not cross-regime validation. Free-host restarts can lose local capture history. Exact retraining requires retaining the original aggregate dataset in addition to the exported report.
 
 Changed source/configuration files: backend/forecast_service.py, backend/forecast_worker.py, backend/test_forecast.py, frontend/src/ForecastComparison.tsx, frontend/src/ForecastHistory.tsx, frontend/src/forecastExperiment.ts, frontend/src/forecast.css, frontend/tests/forecast-experiment.cjs, .github/workflows/ci.yml; documentation: README.md, VERIFICATION.md. Ignored local verification artifacts: data/experiment-report.html, data/experiment-snapshot.json.
+
+## 2026-10-22 — Live map, model visuals, event timeline and forecast readiness (local)
+
+Changes are local and uncommitted; the public Render deployment remains e293659. No metric formula, estimator hyperparameter, BGP parser or aggregation semantics changed. Retraining cadence was reduced to limit single-worker contention; predictions still require complete past inputs and generation within the original two-second deadline. This does not eliminate unavoidable upstream or host gaps.
+
+| Check | Result |
+|---|---|
+| Backend tests | PASS: 32 tests; new cases verify readiness retry without consumed attempts, duplicate suppression, two-second deadline, incomplete/future/disconnected-input rejection |
+| TypeScript | PASS |
+| Forecast export regression suite | PASS: six scenarios |
+| Connection-state suite | PASS: eight assertions/scenarios |
+| New visualization suite | PASS: seven scenarios for lossless bounded timeline grouping/retention, quiet/same-time data, real coordinate provenance/bounds, baseline-winning and zero-error comparisons |
+| Collector metadata acquisition | PASS: 23 active documented collectors; all 23 have published DNS LOC coordinates; co-location groups produce 21 map markers |
+| Map interaction | PASS: Europe viewBox changes, collector selector applies existing scope, RRC23 inspector showed 827 actual observations / 100% in filtered scope, clear restores all collectors |
+| Event interaction | PASS: pause preserved the exact groups while 10,635 new scope events arrived; Table retained 40 rows; Timeline retained at most 240 sampled records; grouped inspector exposes underlying records; search empty state and withdrawal-only filter correct; resume works |
+| Model interaction | PASS: MAE/RMSE switching updates real errors, lowest-error labels and relative baseline comparison; runtime cards and original exports retained |
+| Forecast continuity | Four API observations ten seconds apart each showed 12 issued forecasts in the latest 60 seconds, 11 observed and one pending; a later chart showed 54/60 issued intervals and 53 matched outcomes across a window including restart history |
+| Responsive layouts | PASS: desktop 1280, tablet 768, mobile 390 and 320 px. Document widths 1276 / 764 / 386 / 316 px. Fixed a reproduced mobile map legend/inspector overlap; measured key bottom == inspector top afterward |
+| Console | PASS: no browser errors or warnings captured in the final live local session |
+| Geography semantics | Explicit observation-point/multi-hop notices, no geographic route arcs, no invented missing locations or event origins |
+
+Performance: no new dependencies. The map uses a 59,640-byte SVG backdrop and checked-in metadata, fetched once per mounted panel with a five-second timeout. Map work is bounded by 23 collectors; timeline storage is capped at 240 real sampled records and chart preparation at 60 slots. No per-event external API calls. Production bundle retains the existing >500 kB chunk advisory. No new sustained cloud soak or full deployment verification was performed in this pass; observed local continuity is not a guarantee for the free cloud host. Browser print/PDF was not retested. Metadata is a dated authoritative snapshot and needs manual refresh for infrastructure changes. Detailed event Table still displays the original snapshot's latest 40 records; the timeline intentionally shows bounded sampled history observed during this browser session, clearly labelled.
+
+Changed files: backend/forecast_service.py; backend/test_forecast.py; frontend/src/App.tsx; frontend/src/DashboardTour.tsx; frontend/src/ForecastComparison.tsx; frontend/src/ForecastHistory.tsx; frontend/src/CollectorMap.tsx; frontend/src/ForecastScores.tsx; frontend/src/EventTimeline.tsx; frontend/src/eventTimelineData.ts; frontend/src/visuals.css; frontend/public/geo/collectors.json; frontend/public/geo/world-land.svg; frontend/tests/live-visuals.cjs; scripts/update-map-assets.py; .github/workflows/ci.yml; README.md; VERIFICATION.md.
+
+Final production rebuild: PASS; JavaScript 1,002.95 kB (304.48 kB gzip), CSS 46.58 kB (10.86 kB gzip). Relative to deployed e293659, compressed JavaScript increased by 4.0 kB; map assets are separate cached static files. Final production-preview history showed 59/60 intervals issued and 58 matched actual outcomes. This is a local observation, not a cloud uptime claim. Desktop map screenshot saved for review; temporary viewport overrides reset.
+
+## 2026-10-22 — Event waterfall visual polish (local)
+
+Focused frontend pass: refreshed EventTimeline.tsx and new scoped waterfall.css. Added four clearly labelled sampled-record summaries, announcement/withdrawal operation-share strip, stronger collector lane labels with record counts, count-scaled marks, selected-record highlighting, and a latest/selected record inspector with readable prefix and AS-path chips. All counts derive from the visible filtered sample; this is not presented as the full stream rate. Event retention, filtering, pause/reset semantics, backend processing and table records remain unchanged.
+
+Validation: TypeScript PASS; production build PASS (JS 1,005.62 kB / 305.11 kB gzip; CSS 53.17 kB / 12.13 kB gzip, existing chunk advisory); seven live-visualization scenarios PASS; eight connection scenarios PASS. Browser verified real 240-record sample, nine collectors, 319 announcement prefix operations and 58 withdrawal operations in one frozen snapshot. Withdrawal filtering showed 16 matching records (including mixed operations, correctly retaining three announcement operations), and search produced the expected empty state. Keyboard mark selection opened the selected inspector. Switching to Table retained 40 rows and returning to Timeline preserved the exact paused groups while incoming scope counters continued. Mobile 390 px document width 386 px, two-column summary cards and inspector width 340.8 px; no browser console warnings/errors captured. No new dependencies or backend changes in this follow-up. Changes remain local, uncommitted and undeployed.
+
+### Waterfall styling refinement
+
+After visual feedback, simplified only frontend/src/waterfall.css: removed gradients, shadows and boxed summary cards, reduced summary number sizes, muted event-marker fills and selection outlines, flattened the inspector to the panel background with a subtle divider, and removed heavy AS-path chip borders. Timeline components and data logic are unchanged. TypeScript and production build PASS (JS 1,005.62 kB / 305.11 kB gzip; CSS 53.21 kB / 12.04 kB gzip). Production browser confirmed computed background-image:none for summary, inspector and event marks; 390 px mobile document width 386 px, two-column summaries and no console warnings/errors. Still local and uncommitted; no deployment performed.
+
+### Compact routing signals panel
+
+Replaced App.tsx's repetitive inline observation cards with RoutingSignals.tsx and routing-signals.css. Live counts group all retained signal records by their existing type; explanations are collapsed by default and available through native keyboard-accessible details/summary controls per type. All retained records remain accessible. Clarifies rule-based signals versus trained models, and retained counts versus unique incidents/full event rate. DashboardTour.tsx updated for the new interaction. No backend logic changes.
+
+TypeScript PASS; production build PASS: JS 1,006.10 kB (305.21 kB gzip), CSS 55.38 kB (12.50 kB gzip), existing large-chunk advisory remains. Browser verified default collapse, Enter to expand the panel and a signal type, original explanation/prefix/collector/timestamp display, and collapse again. Counts summed to 30 in the observed retained snapshot. Mobile 390 px document width 386 px and panel width 362.4 px; console clear. Local only; not committed or deployed.
+
+
+## Hourly research capture verification
+
+25 October 2026: all 41 backend tests passed, including nine research archive tests. A live initial capture preserved 4,291 windows, 3,983 issued forecasts, 20 evaluation reports and one real dashboard sample across 12 represented hours and two IST dates. These counts include capture-quality exclusions; they are not a claim of 12 continuously observed hours. Source reads use SQLite read-only transactions; retention independence, settlement, immutable forecasts, duplicate-process locking and JSON/CSV/HTML exports were checked. Full-day runtime remains to be observed. No frontend, ingestion, model parameter, deployment or Git commit changes were made.
+
+## Deployment sync and selectable forecast series - 28 October 2026
+
+- Forecast legend buttons independently toggle Actual, Random Forest, Histogram Gradient Boosting and repeat-previous-window lines. Hidden series are omitted from hover details. Selection stays in component state through live updates; computations and stored forecasts are unchanged. Buttons expose pressed state and keyboard focus; an all-hidden message permits restoring any series.
+- Backend: 41 tests passed. TypeScript and production build passed. Frontend checks: 8 connection scenarios, 6 forecast export/data scenarios and 7 live visualization scenarios passed.
+- Production JavaScript: 1,006.65 kB uncompressed, 305.41 kB gzip; existing chunk-size advisory remains.
+- Deployment does not upload local research databases or start the independent research recorder.

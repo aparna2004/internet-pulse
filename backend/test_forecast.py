@@ -156,6 +156,36 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(service.state['prospective'], dict(samples=0, scores=None))
         self.assertEqual(service.state['valid_windows'], 9)
 
+    def test_forecast_retries_not_ready_inputs_without_consuming_attempt(self):
+        service = ForecastService(SimpleNamespace(connected=True, buckets=[]), ':unused:')
+        service.ready = True
+        service.report = dict(scores={}, version='test', live_fit_label_end=25)
+        service.rows = fixture_rows(4)
+        self.assertIsNone(service.forecast_input(25.1))
+        self.assertIsNone(service.last_attempt)
+        service.rows = fixture_rows(5)
+        origin, vector = service.forecast_input(25.6)
+        self.assertEqual(origin, 25)
+        self.assertEqual(vector, features(service.rows, 25))
+        service.last_attempt = origin
+        self.assertIsNone(service.forecast_input(25.8))
+
+    def test_forecasts_reject_late_incomplete_future_or_disconnected_inputs(self):
+        service = ForecastService(SimpleNamespace(connected=True, buckets=[]), ':unused:')
+        service.ready = True
+        service.report = dict(scores={}, version='test', live_fit_label_end=25)
+        service.rows = fixture_rows(5)
+        self.assertIsNone(service.forecast_input(27))
+        service.rows[-1]['valid'] = False
+        self.assertIsNone(service.forecast_input(25.1))
+        service.rows[-1]['valid'] = True
+        service.report['live_fit_label_end'] = 30
+        self.assertIsNone(service.forecast_input(25.1))
+        service.report['live_fit_label_end'] = 25
+        service.pulse.connected = False
+        self.assertIsNone(service.forecast_input(25.1))
+        self.assertIsNone(service.last_attempt)
+
     def test_cold_start_has_no_report_or_scores(self):
         service = ForecastService(SimpleNamespace(connected=False, buckets=[]), ':unused:')
         self.assertEqual(service.state['status'], 'collecting')

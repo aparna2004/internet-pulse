@@ -58,6 +58,19 @@ class ForecastService:
         self.rows, self.report, self.predictions = await asyncio.to_thread(self.store.read)
         self.samples = await asyncio.to_thread(examples, self.rows)
 
+    def forecast_input(self, now):
+        # Retry input readiness within the issue deadline; do not consume an
+        # attempt until a complete, strictly-past feature vector is available.
+        origin = int(now)//INTERVAL*INTERVAL
+        if (not self.ready or not self.report or not self.pulse.connected or
+            (self.job is not None and not self.job.done()) or
+            (self.prediction_job is not None and not self.prediction_job.done()) or
+            now-origin >= 2 or origin == self.last_attempt or
+            self.report['live_fit_label_end'] > origin):
+            return None
+        x = features(self.rows[-5:], origin)
+        return (origin, x) if x is not None else None
+
     async def forecast(self, x, origin):
         try:
             p = await asyncio.get_running_loop().run_in_executor(self.executor(), forecast_worker.predict, x, origin)
@@ -70,7 +83,7 @@ class ForecastService:
         except Exception:
             log.exception('Forecast inference failed; live ingestion continues')
             self.ready = False
-            self.error = 'Model inference unavailable; retrying in five windows. See backend log.'
+            self.error = 'Model inference unavailable; retrying in five minutes. See backend log.'
             self.retry_at = time.time()+300
             if self.pool:
                 self.pool.shutdown(wait=False, cancel_futures=True)
@@ -94,7 +107,7 @@ class ForecastService:
             raise
         except Exception:
             log.exception('Forecast training failed; live ingestion continues')
-            self.error = 'Model training unavailable; retrying in five windows. See backend log.'
+            self.error = 'Model training unavailable; retrying in five minutes. See backend log.'
             self.retry_at = time.time()+300
             self.ready = False
             if self.pool:
@@ -128,17 +141,13 @@ class ForecastService:
                     samples = self.samples
                     if (len(samples) >= MIN_EXAMPLES and now >= self.retry_at and
                         (self.job is None or self.job.done()) and
-                        (not self.ready or samples[-1]['origin']-self.last_fit_origin >= (30 if len(samples) < 180 else 60))):
+                        (not self.ready or samples[-1]['origin']-self.last_fit_origin >= (120 if len(samples) < 180 else 300))):
                         self.job = asyncio.create_task(self.fit(samples))
-                    origin = int(now)//INTERVAL*INTERVAL
-                    # Skip late forecasts: never backfill predictions after seeing the target.
-                    if (self.ready and (self.job is None or self.job.done()) and
-                        (self.prediction_job is None or self.prediction_job.done()) and
-                        now-origin < 2 and origin != self.last_attempt):
+                    candidate = self.forecast_input(time.time())
+                    if candidate is not None:
+                        origin, x = candidate
                         self.last_attempt = origin
-                        x = features(self.rows[-5:], origin)
-                        if x is not None and self.report['live_fit_label_end'] <= origin:
-                            self.prediction_job = asyncio.create_task(self.forecast(x, origin))
+                        self.prediction_job = asyncio.create_task(self.forecast(x, origin))
                     self.publish()
                 except asyncio.CancelledError:
                     raise

@@ -165,3 +165,23 @@ The existing forecast comparison panel includes **Actual vs predicted**: up to 6
 After an evaluation is available, **Download experiment report** saves self-contained HTML (open it and use Print / Save as PDF). **Download JSON snapshot** preserves full numeric precision. Both freeze the evaluation, data provenance, capture quality, temporal split, features, estimator parameters, runtime versions, dataset hash, current-version prospective results and up to 60 recent issued forecasts. The HTML lists the latest 30 forecast records for readability. Reports are experimental evidence, not proof of generalization; exact retraining additionally requires the original aggregate dataset.
 
 Additional isolated frontend regression checks: node frontend/tests/forecast-experiment.cjs. No new dependencies or routing computations were introduced.
+
+## Live visual analysis
+
+- **Collector geography:** documented RIPE collector coordinates from published DNS LOC records, with a Natural Earth land backdrop. Marker sizes reflect real UPDATE observations in the selected scope; co-located collectors share a location marker. Hover/focus for details, choose a collector to apply the existing scope filter, and use Europe detail to inspect the dense region. These are observation points, not event origins, network headquarters or physical route paths.
+- **Model comparison:** switch between MAE and RMSE bars. Lower is better; the lowest-error model or baseline is labelled honestly, including ties. Runtime cards retain evaluation fit time, measured inference per row and model size. Original detailed results remain in the experiment exports.
+- **Forecast visibility and continuity:** every issued model prediction has a dot, even without adjacent forecasts. Issued/matched interval counts explain gaps. Input readiness can retry within the original two-second issue deadline; late/backfilled forecasts remain forbidden. Initial training still starts at eight eligible examples. Refreshes now occur after 120 seconds of new labels for small samples, then 300 seconds after 180 examples, reducing contention with inference in the existing single worker.
+- **Event timeline:** retains at most 240 real sampled records from received snapshots within the selected rolling window. This is browser-session sample history, not a full event-rate measurement. Marks group nearby records by collector/time to prevent overlap; every underlying record is accessible in the inspector. Table retains the original latest 40 records. Pause freezes each view, incoming counters continue, and existing search/operation filters apply to both. Scope changes reset the sampled history.
+
+Map metadata and land assets are served locally from frontend/public/geo; no map keys, tiles, new npm packages or external per-event lookups are needed. Refresh manually with: python scripts/update-map-assets.py. Metadata records its retrieval time and source; refresh it when collector locations change. Source: https://ris.ripe.net/docs/route-collectors/ and https://stat.ripe.net/data/rrc-info/data.json. Coordinates: published rrcNN.ripe.net DNS LOC. Base map: Natural Earth, public domain (https://www.naturalearthdata.com/about/terms-of-use/).
+
+Regression checks also include: node frontend/tests/live-visuals.cjs.
+
+
+## Hourly research archive
+
+See [RESEARCH_CAPTURE.md](RESEARCH_CAPTURE.md) for independent 30-second capture, IST hourly evidence and fair daily prospective model comparisons. Start with `.\.venv\Scripts\python.exe -m backend.research_archive run` while the backend is running.
+
+## Research paper and implementation
+
+The faculty-review paper studies the real pipeline implemented in this repository. See [Research and implementation guide](RESEARCH.md) for the mapping from paper methods to source files, experimental results, and evidence-package details. Run the dashboard locally using the setup instructions above. The local dashboard shows changing live observations; the paper evaluates a separate frozen multi-session archive. Local research changes may not yet be committed.
